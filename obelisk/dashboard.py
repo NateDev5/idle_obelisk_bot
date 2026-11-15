@@ -188,8 +188,11 @@ def collect() -> dict:
     events = [r for r in rows if "device: press" not in r[2] + r[3]
               and not r[3].startswith(("gem guard", "interrupt: offline"))][-40:]
     failures = sorted((p for p in (LOGS / "failures").glob("*.png")), reverse=True)
-    notifs = sorted((p.name for p in (LOGS / "notifications").glob(f"{today:%Y%m%d}-*.png")),
-                    reverse=True)
+    notifs = []                        # [(label, names newest first)], today then yesterday
+    for label, day in (("Today", today), ("Yesterday", today - dt.timedelta(days=1))):
+        names = sorted((p.name for p in (LOGS / "notifications").glob(f"{day:%Y%m%d}-*.png")),
+                       reverse=True)
+        notifs.append((label, names))
     reports = sorted((p.stem for p in (LOGS / "daily").glob("*.txt")), reverse=True)
     return {
         "now": dt.datetime.now(),
@@ -372,11 +375,12 @@ PAGE = """<!doctype html><html lang="en"><head>
  <p style="margin:10px 0 0"><a href="report/today">Today's full report →</a> · <a href="stats">Stats &amp; graphs →</a></p>
 </div>
 
-<div class="card" id="card-notifs" data-live><h2>Notifications today</h2>
- {% if d.notifs %}<div class="notifs">{% for n in d.notifs %}<figure><a href="notif/{{ n }}"><img loading="lazy" src="notif/{{ n }}" alt="in-game notification"></a>
+<div class="card" id="card-notifs" data-live><h2>Notifications (today &amp; yesterday)</h2>
+ {% for label, names in d.notifs %}<h3 class="sub" style="margin:{{ '0' if loop.first else '14px' }} 0 6px">{{ label }} · {{ names|length }}</h3>
+ {% if names %}<div class="notifs">{% for n in names %}<figure><a href="notif/{{ n }}"><img loading="lazy" src="notif/{{ n }}" alt="in-game notification"></a>
   <figcaption>{{ n[9:11] }}:{{ n[11:13] }}:{{ n[13:15] }}</figcaption></figure>{% endfor %}</div>
- <div class="sub" style="margin:8px 0 0">{{ d.notifs|length }} today, newest first · saved just before the bot tapped each one away</div>
- {% else %}none yet today{% endif %}
+ {% else %}<div>none{{ ' yet' if loop.first }}</div>{% endif %}{% endfor %}
+ <div class="sub" style="margin:8px 0 0">newest first · saved just before the bot tapped each one away</div>
 </div>
 
 <div class="card" id="card-gems" data-live><h2>Gems (48 h)</h2>{{ chart|safe if chart else 'not enough readings yet' }}</div>

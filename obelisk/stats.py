@@ -19,7 +19,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .summary import RE_LINE
+from .summary import NOT_PROBLEMS, RE_LINE
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 SOURCES = ("freebie", "founder", "lootbug")
@@ -93,13 +93,6 @@ def _parse(path: Path) -> list:
                          m.group(3), m.group(4), m.group(5)))
     _cache[path] = (key, rows)
     return rows
-
-
-# warnings that aren't problems: not counted or listed
-NOT_PROBLEMS = (
-    "saved failure screenshot",                  # always follows another problem
-    "cloud: another device's save has more play time",   # loading your newer phone save
-)
 
 
 def issue_key(msg: str) -> str | None:

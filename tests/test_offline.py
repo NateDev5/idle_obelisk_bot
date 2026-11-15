@@ -1770,7 +1770,7 @@ def test_reward_toast_is_pressed_but_not_saved():
         del FRAMES["t"]
 
 
-def test_dashboard_shows_todays_notifications_only():
+def test_dashboard_shows_todays_and_yesterdays_notifications_only():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"
     logs, D.LOGS = D.LOGS, _TMP / "notif_dash"
@@ -1778,14 +1778,18 @@ def test_dashboard_shows_todays_notifications_only():
         nd = D.LOGS / "notifications"
         nd.mkdir(parents=True)
         today = dt.date.today().strftime("%Y%m%d")
+        yday = (dt.date.today() - dt.timedelta(days=1)).strftime("%Y%m%d")
         png = cv2.imencode(".png", FRAMES["notif"][616:717, 0:297])[1].tobytes()
-        for name in ("20200101-120000.png", f"{today}-004412.png", f"{today}-163015.png"):
+        for name in ("20200101-120000.png", f"{today}-004412.png", f"{today}-163015.png",
+                     f"{yday}-215501.png"):
             (nd / name).write_bytes(png)
-        assert D.collect()["notifs"] == [f"{today}-163015.png", f"{today}-004412.png"]
+        assert D.collect()["notifs"] == [("Today", [f"{today}-163015.png", f"{today}-004412.png"]),
+                                         ("Yesterday", [f"{yday}-215501.png"])]
         app = D.create_app(); tok = D.ensure_conf()["token"]
         c = app.test_client(); c.get("/?t=" + tok)
         page = c.get("/").get_data(as_text=True)
-        assert "16:30:15" in page and "00:44:12" in page and "20200101" not in page
+        assert "16:30:15" in page and "00:44:12" in page and "21:55:01" in page
+        assert "Yesterday" in page and "20200101" not in page
         r = c.get(f"/notif/{today}-163015.png")
         assert r.status_code == 200 and r.mimetype == "image/png" and r.data == png
         assert c.get("/notif/..%2Fstate.json").status_code == 404
@@ -1870,6 +1874,23 @@ def test_dashboard_stats_page():
         D.LOGS = logs
 
 
+def test_daily_report_ok_when_the_only_warnings_are_loading_the_phone_save():
+    from obelisk.summary import summarize
+    d = _TMP / "summary_phone"
+    (d / "failures").mkdir(parents=True)
+    (d / "obelisk.log").write_text(
+        "2026-11-12 00:15:40,000 WARNING obelisk.jobs: cloud: another device's save has "
+        "more play time (813626s): downloading it\n"
+        "2026-11-12 00:16:00,000 INFO    obelisk.jobs: job founder -> claimed\n")
+    text = summarize("2026-11-12", d)
+    assert "Status: OK" in text and "newer phone saves loaded" in text
+    (d / "obelisk.log").write_text(
+        (d / "obelisk.log").read_text()
+        + "2026-11-12 01:00:00,000 WARNING obelisk.jobs: cloud: conflict still unresolved (x)\n")
+    text = summarize("2026-11-12", d)
+    assert "NEEDS A LOOK" in text and "another device" not in text.split("Status")[1]
+
+
 if __name__ == "__main__":
     tests = [(n, f) for n, f in sorted(globals().items()) if n.startswith("test_")]
     failed = 0
@@ -1883,3 +1904,4 @@ if __name__ == "__main__":
             traceback.print_exc()
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     sys.exit(1 if failed else 0)
+

@@ -14,6 +14,14 @@ RE_ABORT = re.compile(r"^job (\w+) aborted: (.*) \(\d+/\d+\)$")
 RE_GEM_OK = re.compile(r"^gem guard: (\d+) -> (\d+) ok$")
 RE_SESSION = re.compile(r"^session end: (\d+) s online")
 
+# you played on the phone and uploaded; the bot loads that newer save (normal)
+PHONE_SAVE = "cloud: another device's save has more play time"
+# warnings that aren't problems: not counted, listed or a reason for NEEDS A LOOK
+NOT_PROBLEMS = (
+    "saved failure screenshot",                  # always follows another problem
+    PHONE_SAVE,
+)
+
 LABELS = [
     ("founder", "claimed", "Founder drops claimed"),
     ("lootbug", "looted", "Lootbug batches looted"),
@@ -72,6 +80,8 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
             starts += 1
         if msg.startswith("cloud upload -> uploaded"):
             interrupts["cloud uploads"] += 1
+        if msg.startswith(PHONE_SAVE):
+            interrupts["newer phone saves loaded"] += 1
         if msg.startswith("session skipped: cloud save conflict"):
             interrupts["sessions skipped (cloud conflict)"] += 1
         elif msg.startswith("interrupt: closing lootbug popup"):
@@ -80,7 +90,7 @@ def summarize(date: str, log_dir: Path = LOG_DIR) -> str:
             interrupts["game relaunches"] += 1
         elif msg.startswith("screen is") and "re-applying wm size" in msg:
             interrupts["resolution re-applied"] += 1
-        if level in ("WARNING", "ERROR", "CRITICAL"):
+        if level in ("WARNING", "ERROR", "CRITICAL") and not msg.startswith(NOT_PROBLEMS):
             problems.append(f"{t} {level}: {msg}")
 
     failures = sorted(p.name for p in (log_dir / "failures").glob(f"{date.replace('-', '')}-*.png"))
