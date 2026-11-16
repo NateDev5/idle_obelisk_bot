@@ -98,3 +98,14 @@ does this for all of them except Cloud Auto-Save (see the end of this page).
 | Setting | Original | Changed to |
 |---|---|---|
 | **Toggle Cloud Auto-Save** | ON | **off** (2026-11-01 12:52; the bot uploads itself, only when no other device has uploaded since its last upload) |
+
+## Prestige menu (grid menu -> Prestige)
+| Setting | Original | Changed to |
+|---|---|---|
+| **Auto Prestige** | off | **ON** (2026-11-16 04:00, at your request) |
+| **Toggle Interval** | 10s | **180s** (press the red interval button to step through 10-55s, 60, 90, 120, 180 ... 600s) |
+
+180 s comes from timing 4 manual prestiges on 2026-11-16: it gives the most
+level-ups at level 100+ (each one is a Happy-Bot level-up roll), about 420-520
+per hour depending on the run's speed; 300 s does ~470-480 either way.
+Auto Prestige only runs while the game is open (keep-open mode), not offline.
