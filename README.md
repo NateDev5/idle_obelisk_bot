@@ -137,11 +137,16 @@ venv/bin/python -m obelisk cloud --keep-pi   # the Pi's save wins at the next se
 The dashboard's Cloud row has the same **Keep the Pi save** button; it also runs a
 session right away. An open conflict alerts again every 6 h.
 
-To keep the phone's save instead, play long enough on the phone that its play
-time passes the Pi's, upload, and download it on the Pi (by hand for now; the
-game only enables Download when the cloud save has more play time). Loading a
-save restores that save's settings, including Cloud Auto-Save, which the bot
-turns off again.
+**The phone's save wins** (the owner's rule): whenever the cloud save has more
+play time than the Pi's, the next session downloads it by itself. The game
+greys out Download until then, and the Pi's save can be ahead even though the
+phone uploaded last (2026-11-18: the Pi was 20 s ahead after a keep-open
+session). The conflict alert then says how long to play on the phone: the gap
+plus 1 min, since the Pi's save creeps up a little at each skipped-session
+visit. Play that long, upload from the phone, and the next session loads it.
+`--keep-pi` / the dashboard button is only an override for the rare case the
+Pi's save should win. Loading a save restores that save's settings, including
+Cloud Auto-Save, which the bot turns off again.
 
 **No record of the last upload** (e.g. `logs/state.json` lost): the bot can't run
 this check, so it reports a conflict rather than risk overwriting anything.
@@ -233,7 +238,11 @@ game for 3 h until a VNC viewer connected. If screencap still hangs for 5 min
 dashboard's Restart Waydroid + bot does, and alerts the phone; at most once
 per 6 h. If the screen is still (or again) frozen 10 min after that restart,
 the bot alerts the phone and reboots the Pi (on 2026-11-09 only a reboot
-fixed it); at most once per 6 h and never while the bot is paused. After
+fixed it); at most once per 6 h and never while the bot is paused. The same
+restart-then-reboot happens when adb can't find Android for 5 min
+("device '…' not found": on 2026-11-17 Android dropped off the network while
+Waydroid's container still said RUNNING), except that then not even the
+Waydroid restart happens while the bot is paused. After
 that the normal outage alerts carry on. If the bot still gave
 up, connect with VNC, then `systemctl --user restart obelisk-bot`.
 Every crash/outage alert carries a health picture (`obelisk/health.py`,

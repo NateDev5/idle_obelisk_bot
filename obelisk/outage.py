@@ -103,6 +103,26 @@ def screen_frozen(error: BaseException | str) -> bool:
     return text.startswith("timeout:") and "screencap" in text
 
 
+def android_unreachable(error: BaseException | str) -> bool:
+    """adb can't see Android at all ("adb: device '<ip>:5555' not found"; `adb
+    connect` said "No route to host"). 2026-11-17 22:5x: Android dropped off
+    the network while Waydroid's container still said RUNNING; the bot was
+    down until the Pi was rebooted by hand 30 min later."""
+    text = str(error)
+    return "device '" in text and "' not found" in text
+
+
+def _problem(error: BaseException | str) -> tuple[str, str] | None:
+    """("... has been <bad>", "... is still <bad>") for the outages that a
+    Waydroid restart (then a Pi reboot) can fix, else None."""
+    if screen_frozen(error):
+        return "Android's screen has been frozen", "Android's screen is still frozen"
+    if android_unreachable(error):
+        return ("Android has been unreachable over adb",
+                "Android is still unreachable over adb")
+    return None
+
+
 def restart_if_frozen(error: BaseException | str, state=None, now: float | None = None,
                       start_restart=None, sender=None) -> bool:
     """Android's screen froze (2026-11-09 08:54: every screencap hung for an
@@ -114,70 +134,82 @@ def restart_if_frozen(error: BaseException | str, state=None, now: float | None 
     FREEZE_REBOOT_GAP and never while the bot is paused (someone may be
     using the Pi). After that the normal outage path (reminders, give up)
     carries on. Returns True if a restart or reboot was started (the caller
-    then exits 0). Call after report_down()."""
-    if not screen_frozen(error):
+    then exits 0). Call after report_down().
+
+    The same goes for Android being unreachable over adb (android_unreachable),
+    except that then not even the Waydroid restart happens while the bot is
+    paused: the paused bot still tries adb at every start, so stopping
+    Waydroid on purpose would otherwise get it restarted."""
+    problem = _problem(error)
+    if problem is None:
         return False
+    has_been, still = problem
     state = _state(state)
     now = time.time() if now is None else now
     o = state.get("outage") or {}
     if not o or now - o.get("since", now) < FREEZE_RESTART_AFTER:
         return False
+    if android_unreachable(error):
+        from .scheduler import pause_active
+        if pause_active(state.get("paused_until"), now):
+            log.info("%s; the bot is paused, so not restarting Waydroid", has_been)
+            return False
     last = state.get("freeze_restart_at")
     if start_restart is None:
         from .dashboard import start_restart
     if last is not None and now - last < FREEZE_RESTART_GAP:
-        return _reboot_if_still_frozen(state, now, last, start_restart, sender)
+        return _reboot_if_still_frozen(state, now, last, start_restart, sender, still)
     err = start_restart("all")
     if err:
-        log.error("Android's screen is frozen, but the Waydroid restart couldn't start: %s", err)
+        log.error("%s, but the Waydroid restart couldn't start: %s", has_been, err)
         return False
     state.set("freeze_restart_at", now)
-    log.warning("Android's screen has been frozen for %s; restarting Waydroid and the bot",
-                _fmt(now - o["since"]))
+    log.warning("%s for %s; restarting Waydroid and the bot", has_been, _fmt(now - o["since"]))
     kw = {"state": state, "force": True}
     if sender is not None:
         kw["sender"] = sender
     _alert("freeze_restart", "Obelisk: restarting Waydroid",
-           f"Android's screen has been frozen for {_fmt(now - o['since'])}. The bot is "
+           f"{has_been} for {_fmt(now - o['since'])}. The bot is "
            "restarting Waydroid and itself; nothing to do unless another alert follows.",
            tags="arrows_counterclockwise", **kw)
     return True
 
 
-def _reboot_if_still_frozen(state, now: float, last_restart: float, start_restart, sender) -> bool:
-    """The step after a Waydroid restart that didn't fix the frozen screen."""
+def _reboot_if_still_frozen(state, now: float, last_restart: float, start_restart, sender,
+                            still: str = "Android's screen is still frozen") -> bool:
+    """The step after a Waydroid restart that didn't fix the frozen screen
+    (or unreachable Android)."""
     from .scheduler import pause_active
     since = now - last_restart
     rebooted = state.get("freeze_reboot_at")
     if since < FREEZE_REBOOT_AFTER:
         return False                 # the restart may still be settling
     if rebooted is not None and now - rebooted < FREEZE_REBOOT_GAP:
-        log.info("Android's screen is frozen again %s after the last Pi reboot; "
-                 "not rebooting again", _fmt(now - rebooted))
+        log.info("%s %s after the last Pi reboot; not rebooting again",
+                 still, _fmt(now - rebooted))
         return False
     if pause_active(state.get("paused_until"), now):
-        log.info("Android's screen is still frozen after the Waydroid restart; "
-                 "the bot is paused, so not rebooting the Pi")
+        log.info("%s after the Waydroid restart; the bot is paused, so not rebooting the Pi",
+                 still)
         return False
     kw = {"state": state, "force": True}
     if sender is not None:
         kw["sender"] = sender
     # alert first: the reboot can take the network down before a later send
     _alert("freeze_reboot", "Obelisk: rebooting the Pi",
-           f"Android's screen is still frozen {_fmt(since)} after the Waydroid restart. "
+           f"{still} {_fmt(since)} after the Waydroid restart. "
            "The bot is rebooting the Pi; it's back in about 10 min. Nothing to do unless "
            "another alert follows.", priority="high", tags="arrows_counterclockwise", **kw)
     state.set("freeze_reboot_at", now)     # before: the reboot may kill this process
     err = start_restart("reboot")
     if err:
         state.set("freeze_reboot_at", rebooted)
-        log.error("Android's screen is frozen, but the Pi reboot couldn't start: %s", err)
+        log.error("%s, but the Pi reboot couldn't start: %s", still, err)
         _alert("freeze_reboot_failed", "Obelisk: couldn't reboot the Pi",
                f"The reboot failed to start ({err}). Reboot it from the dashboard.",
                priority="high", tags="warning", **kw)
         return False
-    log.warning("Android's screen is still frozen %s after the Waydroid restart; "
-                "rebooting the Pi", _fmt(since))
+    log.warning("%s %s after the Waydroid restart; rebooting the Pi", still, _fmt(since))
     return True
 
 

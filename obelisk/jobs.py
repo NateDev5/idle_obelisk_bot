@@ -460,27 +460,46 @@ class CloudSync:
         last = dev.capture()
         return last if screens.identify(last) == CLOUD else frame
 
+    PHONE_MARGIN = 60   # s on top of the gap: the Pi's save creeps up at each skipped-session visit
+
+    def _phone_wins_hint(self, frame) -> str:
+        """What to do so the phone's save wins (the user's rule, 2026-11-18).
+        The game greys out Download until the cloud save has MORE play time than
+        the Pi's own save, and the Pi's can be ahead even though the phone
+        uploaded last (2026-11-18 00:19: cloud 14d 12h 59m 49s, Pi 14d 13h 00m 09s)."""
+        from .playtime import CLOUD_ROW, LOCAL_ROW, read_seconds
+        cloud_t = read_seconds(frame, CLOUD_ROW) if frame is not None else None
+        local_t = read_seconds(frame, LOCAL_ROW) if frame is not None else None
+        if cloud_t and local_t and local_t >= cloud_t:
+            need = local_t - cloud_t + self.PHONE_MARGIN
+            return (f"To load your phone's save: play at least {need // 60} min {need % 60:02d} s "
+                    f"more on the phone and upload; the next session loads it by itself "
+                    f"(the game greys out Download until the cloud save has more play time "
+                    f"than the Pi's: cloud {cloud_t}s, Pi {local_t}s).")
+        return ("To load your phone's save: upload it from the phone with more play time "
+                "than the Pi's; the next session loads it by itself.")
+
     def _conflict(self, frame, why: str) -> str:
+        hint = self._phone_wins_hint(frame)
         if not self.state.get("cloud_conflict"):
             shot = save_failure(frame, "cloud_conflict")
             from .notify import alert
             alert("cloud_conflict", "Obelisk bot: cloud save conflict",
-                  f"{why}. The bot is paused (no playing/uploading) until you decide: "
-                  "keep the Pi's save with 'python -m obelisk cloud --keep-pi', or "
-                  "play longer on the phone and upload, then ask for a download.",
+                  f"{why}. The bot is paused (no playing/uploading) so nothing of the "
+                  f"phone's is overwritten. {hint}",
                   priority="high", tags="warning,cloud", state=self.state, image=shot, force=True)
         self.state.set("cloud_conflict", why)
-        log.warning("cloud: CONFLICT (%s). Not playing or uploading until resolved: "
-                    "python -m obelisk cloud --keep-pi  (or make the other device's save "
-                    "longer and download it)", why)
+        log.warning("cloud: CONFLICT (%s). Not playing or uploading until the phone's save "
+                    "can be loaded. %s", why, hint)
         return "conflict"
 
-    def _remind(self, key: str, why: str) -> None:
+    def _remind(self, key: str, why: str, frame=None) -> None:
         """Same key as the first alert, so at most one per 6 h. One alert wasn't
         enough: a conflict on 2026-11-03 held the bot up for 13 h."""
         from .notify import alert
+        hint = f" {self._phone_wins_hint(frame)}" if key == "cloud_conflict" else ""
         alert(key, "Obelisk bot: still held up by the cloud save",
-              f"{why}. Sessions are being skipped, so nothing is being claimed. "
+              f"{why}. Sessions are being skipped, so nothing is being claimed.{hint} "
               "See the Cloud row on the dashboard.", priority="high", tags="warning,cloud",
               state=self.state)
 
@@ -577,7 +596,7 @@ class CloudSync:
             return self._download(dev, frame, cloud_t)
         if self.state.get("cloud_conflict"):
             log.warning("cloud: conflict still unresolved (%s)", self.state.get("cloud_conflict"))
-            self._remind("cloud_conflict", self.state.get("cloud_conflict"))
+            self._remind("cloud_conflict", self.state.get("cloud_conflict"), frame)
             return "conflict"
         cloud_t = read_seconds(frame, CLOUD_ROW)
         if cloud_t is None:

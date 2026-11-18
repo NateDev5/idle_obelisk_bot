@@ -108,6 +108,8 @@ F = {
     "lootall_5": "n114_lootall_5.png",          # Loot-All after the double tap: 5 looted
     "after_lootall": "n115_after_lootall.png",  # row and field bug both gone
     "notif": "n116_notification_elixir.png",    # keep-open 00:44: "Elixir Drone is now Grade 6!" box
+    # 2026-11-18 00:19: the phone uploaded last, but the Pi's save is 20 s ahead: Download greyed
+    "cloud_pi_ahead": "n117_cloud_pi_ahead_of_phone.png",
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -1141,6 +1143,26 @@ def test_open_conflict_alerts_again_through_the_6_hour_limit():
     assert sent == [("cloud_conflict", True), ("cloud_conflict", False)]
 
 
+def test_conflict_alert_says_how_long_to_play_on_the_phone():
+    # the user's rule: the phone's save always wins; the game greys out Download
+    # until the cloud save has more play time than the Pi's, so say by how much
+    import obelisk.notify as nt
+    sent = []
+    orig = nt.alert
+    nt.alert = lambda key, title, msg, *a, **k: sent.append((key, msg)) or True
+    try:
+        st = _jobs.State(_TMP / "phone_wins.json")
+        st.set("cloud_last_upload", 1256374)                 # cloud now 1256389, Pi 1256409
+        dev = _cloud_visit("cloud_pi_ahead")
+        assert CloudSync(st).upload(dev) == "conflict"
+        assert all(not inside(p[1], UPLOAD_BTN) for p in dev.presses)
+    finally:
+        nt.alert = orig
+    key, msg = sent[0]
+    assert key == "cloud_conflict" and "--keep-pi" not in msg
+    assert "play at least 1 min 20 s more on the phone and upload" in msg      # 20 s + 60 s
+
+
 def test_dashboard_keep_pi_button():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"
@@ -1614,6 +1636,36 @@ def test_frozen_screen_after_the_waydroid_restart_reboots_the_pi_once():
     assert out.restart_if_frozen(frozen, st, t2 + 300, go, snd)
     assert out.restart_if_frozen(frozen, st, t2 + 900, go, snd)
     assert restarts == ["all", "reboot", "all", "reboot"]
+
+
+def test_unreachable_android_restarts_waydroid_then_reboots():
+    # 2026-11-17: Android dropped off the network, Waydroid's container still RUNNING
+    import obelisk.outage as out
+    st = _jobs.State(_TMP / "unreachable.json")
+    sent, restarts = [], []
+    snd = lambda title, msg, prio, tags, image=None: sent.append((title, msg))
+    go = lambda what: restarts.append(what)
+    crash = ("DeviceError: adb -s 192.168.240.112:5555 shell dumpsys activity activities "
+             "-> adb: device '192.168.240.112:5555' not found")
+    cant_start = ("adb -s 192.168.240.112:5555 exec-out screencap -> "
+                  "error: device '192.168.240.112:5555' not found")
+    assert out.android_unreachable(crash) and out.android_unreachable(Exception(cant_start))
+    assert not out.android_unreachable("adb: device offline")
+    assert not out.android_unreachable("timeout: adb -s x exec-out screencap")
+    assert not out.screen_frozen(crash)
+    t0 = 4_000_000.0
+    out.report_down("crashed", crash, st, t0, snd)
+    assert not out.restart_if_frozen(cant_start, st, t0 + 60, go, snd)      # could be a blip
+    st.set("paused_until", "forever")              # Waydroid may be stopped on purpose
+    assert not out.restart_if_frozen(cant_start, st, t0 + 300, go, snd) and restarts == []
+    st.set("paused_until", None)
+    assert out.restart_if_frozen(cant_start, st, t0 + 310, go, snd) and restarts == ["all"]
+    assert sent[-1][0] == "Obelisk: restarting Waydroid"
+    assert sent[-1][1].startswith("Android has been unreachable over adb for 5 min.")
+    assert not out.restart_if_frozen(cant_start, st, t0 + 310 + 120, go, snd)  # settling
+    assert out.restart_if_frozen(cant_start, st, t0 + 310 + 600, go, snd)
+    assert restarts == ["all", "reboot"] and sent[-1][0] == "Obelisk: rebooting the Pi"
+    assert sent[-1][1].startswith("Android is still unreachable over adb 10 min after")
 
 
 def test_keep_open_keeps_a_picture_every_5_min():
