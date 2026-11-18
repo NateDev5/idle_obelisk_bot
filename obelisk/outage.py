@@ -98,9 +98,13 @@ FREEZE_REBOOT_GAP = 6 * 3600     # at most one reboot in this long; then the out
 
 
 def screen_frozen(error: BaseException | str) -> bool:
-    """Device.capture() timed out even after nudging the desktop and retrying."""
+    """Device.capture() timed out even after nudging the desktop and retrying,
+    or screencap returned nothing (2026-11-16 03:08-03:28: every screencap came
+    back empty until Waydroid was restarted by hand; the timeout-only check
+    never started the automatic restart)."""
     text = str(error)
-    return text.startswith("timeout:") and "screencap" in text
+    return (text.startswith("timeout:") and "screencap" in text) or \
+        "screencap returned no data" in text
 
 
 def android_unreachable(error: BaseException | str) -> bool:

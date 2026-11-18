@@ -1586,6 +1586,7 @@ def test_frozen_screen_restarts_waydroid_once():
     frozen = "timeout: adb -s 192.168.240.112:5555 exec-out screencap"
     t0 = 2_000_000.0
     assert out.screen_frozen(Exception(frozen)) and not out.screen_frozen("timeout: adb shell input")
+    assert out.screen_frozen(Exception("screencap returned no data"))   # 2026-11-16: empty, not hung
     out.report_down("crashed", frozen, st, t0, snd)
     assert not out.restart_if_frozen(frozen, st, t0 + 60, go, snd)          # could be a blip
     assert not out.restart_if_frozen("adb: device offline", st, t0 + 400, go, snd)
