@@ -81,6 +81,8 @@ F = {
     "store_closed": "n45_store_closed.png",
     # 2026-11-20 05:35, after a claim: gems 4395, "Banked: 1/20", Claim still green
     "store_still_banked": "n119_freebie_still_banked.png",
+    # 2026-11-19 05:22: Loot-All open, its header hidden by "+1 Item Chest" etc. toasts
+    "bug_popup_toasts": "n120_lootbug_popup_toasts.png",
     "bug_popup": "n21_lootbug_popup_settled.png",
     "grid": "n50_grid_menu.png",
     "cloud": "n51_cloud.png",                        # auto-save ON, upload enabled
@@ -591,6 +593,14 @@ def test_cloud_conflict_never_uploads():
 def test_lootbug_popup_v2252_closes_with_its_x_only():
     assert screens.identify(FRAMES["bug_popup_v2252"]) == screens.LOOTBUG_POPUP
     dev = FakeDevice("bug_popup_v2252", {"bug_popup_v2252": [(BUG_POPUP_X, ["no_bugs"])]})
+    _jobs.close_lootbug_popup(dev)
+    assert [p[0] for p in dev.presses] == ["bug_popup_v2252"]
+
+
+def test_lootbug_popup_is_closed_once_the_loot_toasts_pass():
+    assert screens.identify(FRAMES["bug_popup_toasts"]) != screens.LOOTBUG_POPUP
+    dev = FakeDevice("bug_popup_toasts", {"bug_popup_v2252": [(BUG_POPUP_X, ["no_bugs"])]})
+    dev.queue = ["bug_popup_toasts", "bug_popup_toasts", "bug_popup_v2252"]
     _jobs.close_lootbug_popup(dev)
     assert [p[0] for p in dev.presses] == ["bug_popup_v2252"]
 

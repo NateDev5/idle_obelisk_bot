@@ -267,10 +267,16 @@ class LootbugJob:
         return False
 
 
+LOOTBUG_TOAST_WAIT = 6.0   # s; loot toasts ("+3 Gems", "+2 Item Chests") cross the popup header
+
+
 def close_lootbug_popup(dev) -> None:
-    frame = dev.capture()
-    if screens.identify(frame) != LOOTBUG_POPUP:
-        raise JobAborted("expected lootbug popup before closing", frame)
+    # The reward toasts of a Loot-All slide over the popup's header for a few
+    # seconds, one per loot, so a single capture often missed it (4 aborts
+    # 2026-11-15..19; each time the popup interrupt closed it ~3 s later).
+    frame = wait_for(dev, lambda f: screens.identify(f) == LOOTBUG_POPUP, timeout=LOOTBUG_TOAST_WAIT)
+    if frame is None:
+        raise JobAborted("expected lootbug popup before closing", dev.capture())
     dev.press(*screens.lootbug_close(frame).center)
     if wait_for(dev, lambda f: screens.identify(f) == MINING, timeout=6) is None:
         raise JobAborted("lootbug popup did not close", dev.capture())
