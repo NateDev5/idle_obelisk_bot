@@ -1778,6 +1778,16 @@ def test_notification_box_found_only_on_the_real_box():
         assert screens.notification_box(FRAMES[k]) is None, k
 
 
+def test_grey_floor_is_not_a_notification_box():
+    # 2026-11-20 01:32: the grey floor of a later mine (24,24,24) was taken for
+    # the box fill, saved as a notification and pressed every 10 min
+    crop = load("n118_notif_false_floor_crop.png")              # x 0-483, 177 rows
+    f = FRAMES["store_closed"].copy()                            # mining screen
+    f[300:300 + crop.shape[0], :crop.shape[1]] = crop
+    assert screens.notification_box(f) is None
+    assert not NotificationInterrupt().handle(FakeDevice("store_closed", {}), f)
+
+
 def test_notification_interrupt_presses_the_box_once_and_backs_off():
     dev = FakeDevice("notif", {"notif": [(NOTIF_BOX, ["after_lootall"])]})
     it = NotificationInterrupt()

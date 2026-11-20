@@ -227,9 +227,24 @@ def lootbug_stored(frame: np.ndarray) -> Optional[Match]:
 # (2026-11-10 00:44). The timer rows use the same fill but end at x~122, so only
 # x 130-225 is checked. On 64 saved mining frames (dark space floors included)
 # it matched only that box; menus share the fill, so callers check MINING first.
+# The fill is blue-tinted (24,20,16 or 24,16,16 on 87 saved boxes, ~19 when
+# averaged). The grey floor of later mines (24,24,24 / 16,16,16) is within the
+# +-8 used to find the rows, and from 2026-11-16 most saved "notifications" were
+# bare floor, pressed every 10 min. So a found span must also be mostly that
+# exact tint (NOTIF_TINT_TOL); the loose match still sets its rows and crop, so
+# the blended edge rows count towards the box height (see NOTIF_MIN_ROWS).
 NOTIF_FILL = np.array([24, 20, 16])
+NOTIF_TINTS = np.array([[24, 20, 16], [24, 16, 16]])
+NOTIF_TINT_TOL = 4
+NOTIF_TINT_MIN = 0.3        # boxes 0.6-0.91 of the span, the grey floor 0-0.01
 NOTIF_STRIP = (130, 226)
 NOTIF_ROWS = (250, 1090)
+
+
+def _is_box_tint(px: np.ndarray) -> np.ndarray:
+    """Boolean mask of pixels in the box's own (blue-tinted) fill colour."""
+    d = np.abs(px[..., None, :].astype(int) - NOTIF_TINTS).max(axis=-1)
+    return (d <= NOTIF_TINT_TOL).any(axis=-1)
 
 
 def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
@@ -247,7 +262,8 @@ def notification_box(frame: np.ndarray) -> Optional[tuple[int, int]]:
             spans.append([y, y])
     for a, b in spans:
         dark = int(((rows >= a) & (rows <= b)).sum())
-        if b - a >= 50 and dark >= 50:
+        if b - a >= 50 and dark >= 50 and \
+                _is_box_tint(frame[a:b + 1, NOTIF_STRIP[0]:NOTIF_STRIP[1]]).mean() >= NOTIF_TINT_MIN:
             return int(a), int(b)
     return None
 
