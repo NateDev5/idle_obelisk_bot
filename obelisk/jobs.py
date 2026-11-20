@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 
 from . import screens
+from .gems import read_gems
 from .screens import (A, CLOUD, CLOUD_AUTOSAVE, CLOUD_DOWNLOAD, CLOUD_TIME, CLOUD_UPLOAD, GRID_MENU,
                       LOOTBUG_POPUP, MINING, OFFLINE_OPTIONS, OFFLINE_RESULTS, STORE)
 
@@ -121,11 +122,8 @@ class FreebieJob:
                 raise JobAborted("freebie row not recognised", dev.capture())
             state, claim = screens.freebie_state(frame)
             if state == "ready":
-                dev.press(*claim.center)
-                done = wait_for(dev, lambda f: screens.freebie_state(f)[0] == "empty", timeout=8)
-                if done is None:
-                    raise JobAborted("claim not verified (button not dimmed)", dev.capture())
-                log.info("freebie claimed")
+                n = self.claim_all(dev, frame, claim)
+                log.info("freebie claimed" + (f" ({n} presses)" if n > 1 else ""))
                 result = "claimed"
             else:
                 log.info("freebie: nothing banked")
@@ -138,6 +136,31 @@ class FreebieJob:
             raise
         close_store(dev)
         return result
+
+    # One press normally empties the whole bank (+77..+277 gems at once). On
+    # 2026-11-20 05:35, after loading the phone's save, a press gave +33 and left
+    # "Banked: 1/20" with Claim still green, so it was reported unverified and
+    # the last freebie waited a session. Press again while each press raises the
+    # gem count; a press that gains nothing still aborts, as before.
+    CLAIM_WAIT = 8.0        # s for Claim to turn grey after a press
+    MAX_CLAIMS = 5
+
+    def claim_all(self, dev, frame: np.ndarray, claim) -> int:
+        """Press Claim until the button is grey; returns the number of presses."""
+        for n in range(1, self.MAX_CLAIMS + 1):
+            before = read_gems(frame)
+            dev.press(*claim.center)
+            if wait_for(dev, lambda f: screens.freebie_state(f)[0] == "empty",
+                        timeout=self.CLAIM_WAIT) is not None:
+                return n
+            frame = dev.capture()
+            state, claim = screens.freebie_state(frame)
+            after = read_gems(frame)
+            if state != "ready" or before is None or after is None or after <= before:
+                raise JobAborted("claim not verified (button not dimmed)", frame)
+            log.info("freebie: still banked after press %d (gems %d -> %d); claiming again",
+                     n, before, after)
+        raise JobAborted(f"freebie still banked after {self.MAX_CLAIMS} presses", frame)
 
 
 # The Store keeps its scroll position; the Freebie row sits below the Value

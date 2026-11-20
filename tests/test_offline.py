@@ -79,6 +79,8 @@ F = {
     "store_empty": "n44_freebie_claimed.png",
     "store_top": "n40_store.png",                    # opened at the top: no Freebie row
     "store_closed": "n45_store_closed.png",
+    # 2026-11-20 05:35, after a claim: gems 4395, "Banked: 1/20", Claim still green
+    "store_still_banked": "n119_freebie_still_banked.png",
     "bug_popup": "n21_lootbug_popup_settled.png",
     "grid": "n50_grid_menu.png",
     "cloud": "n51_cloud.png",                        # auto-save ON, upload enabled
@@ -311,6 +313,36 @@ def test_freebie_job_claims_and_closes():
     })
     assert FreebieJob().run(dev) == "claimed"
     assert [p[0] for p in dev.presses] == ["mining_bugs", "store_ready", "store_empty"]
+
+
+CLAIM_LOWER = (550, 880, 644, 941)          # Claim on store_still_banked
+
+
+def test_freebie_job_claims_again_while_still_banked():
+    dev = FakeDevice("mining_bugs", {
+        "mining_bugs": [(STORE_ICON, ["store_ready"])],
+        "store_ready": [(CLAIM, ["store_toast", "store_still_banked"])],    # 658 -> 4395 gems
+        "store_still_banked": [(CLAIM_LOWER, ["store_empty"])],
+        "store_empty": [(STORE_X, ["store_closed"])],
+    })
+    job = FreebieJob(); job.CLAIM_WAIT = 0.01
+    assert job.run(dev) == "claimed"
+    assert [p[0] for p in dev.presses] == ["mining_bugs", "store_ready", "store_still_banked",
+                                           "store_empty"]
+
+
+def test_freebie_claim_that_gains_nothing_aborts():
+    dev = FakeDevice("mining_bugs", {
+        "mining_bugs": [(STORE_ICON, ["store_ready"])],
+        "store_ready": [(CLAIM, ["store_ready"]), (STORE_X, ["store_closed"])],   # no change
+    })
+    job = FreebieJob(); job.CLAIM_WAIT = 0.01
+    try:
+        job.run(dev)
+        raise AssertionError("expected abort")
+    except JobAborted as e:
+        assert "not verified" in str(e)
+    assert [p[0] for p in dev.presses] == ["mining_bugs", "store_ready", "store_ready"]   # 1 claim, close
 
 
 def test_freebie_job_from_full_bank_icon():
