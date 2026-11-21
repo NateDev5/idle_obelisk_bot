@@ -6,7 +6,7 @@ It reads the bot's files (logs/, state.json, daily reports, screenshots) and
 `systemctl --user is-active`; it never talks to the device or the game. Its
 only writes: pause/resume/session-now/keep-open/keep-Pi flags in state.json, and
 the Restart buttons (bot service / Waydroid session + bot via scripts/restart_all.sh /
-reboot the Pi).
+reboot the Pi). The Resources card reads /proc and /sys (obelisk/usage.py).
 
 Access needs the secret token from dashboard.conf (gitignored): open
 http://<pi>:8765/?t=<token> once; a cookie remembers it on that phone.
@@ -27,6 +27,7 @@ from flask import Flask, Response, abort, make_response, redirect, render_templa
 from markupsafe import Markup, escape
 
 from . import stats as stats_mod
+from . import usage
 from .summary import RE_LINE, summarize
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +40,7 @@ RE_GEM = re.compile(r"^gem guard: (\d+) -> (\d+) ok$")
 RE_SESSION_END = re.compile(r"^session end: (\d+) s online; next session (\d\d:\d\d:\d\d)")
 SAFE_NAME = re.compile(r"^[\w.\-]+\.(png|jpg)$")
 SAFE_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
+RESOURCES = usage.Sampler()
 # keep-open slider, minutes
 KEEP_MIN, KEEP_MAX, KEEP_STEP, KEEP_DEFAULT = 15, 24 * 60, 15, 60
 
@@ -226,7 +228,15 @@ def collect() -> dict:
                          if HEALTH_PNG.exists() else None),
         "latest_mtime": (dt.datetime.fromtimestamp((LOGS / "latest.jpg").stat().st_mtime)
                          if (LOGS / "latest.jpg").exists() else None),
+        "res": resources(),
     }
+
+
+def resources() -> dict | None:
+    try:
+        return RESOURCES.get()
+    except Exception:              # a missing /sys file must never take the page down
+        return None
 
 
 def gem_svg(points, w=640, h=160) -> str:
@@ -285,6 +295,15 @@ a{color:var(--accent)}
 background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 .ctl button.primary{background:var(--accent);border-color:var(--accent);color:var(--bg);font-weight:600}
 .ctl button.stop:not(:disabled){border-color:var(--bad);color:var(--bad);font-weight:600}
+.meters{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 14px;margin-bottom:12px}
+.meters div{font-size:13px}.meters b{float:right}.meters small{color:var(--muted);font-size:12px}
+.meter{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:3px 0 1px}
+.meter i{display:block;height:100%;background:var(--accent)}.meter i.warn{background:var(--warn)}
+.meter i.bad{background:var(--bad)}
+.res{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+.res th{color:var(--muted);font-weight:600;font-size:12px;text-align:right}.res th:first-child{text-align:left}
+.res td{text-align:right;padding:3px 0;border-top:1px solid var(--line)}.res td:first-child{text-align:left}
+.res tr.sub td:first-child{padding-left:14px;color:var(--muted)}.res tr.tot td{font-weight:600}
 .slider{display:flex;justify-content:space-between;margin:10px 0 0}
 input[type=range]{width:100%;height:36px;margin:2px 0 8px;accent-color:var(--accent)}ul{margin:0;padding-left:18px}pre{white-space:pre-wrap;font-size:13px}
 """
@@ -360,6 +379,29 @@ PAGE = """<!doctype html><html lang="en"><head>
   {% if d.restart_running %}<div class="WARNING">restart in progress…</div>{% endif %}
   {% for line in d.restart_log|reverse %}<div>{{ line }}</div>{% endfor %}
  </div>{% endif %}
+</div>
+
+<div class="card" id="card-res" data-live><h2>Resources</h2>
+ {% set r = d.res %}{% if r %}
+ {% macro meter(name, pct, value, note, warn=80, bad=95) %}<div>{{ name }}<b>{{ value }}</b>
+  <div class="meter"><i class="{{ 'bad' if pct >= bad else 'warn' if pct >= warn else '' }}" style="width:{{ [[pct, 0]|max, 100]|min }}%"></i></div>
+  <small>{{ note }}</small></div>{% endmacro %}
+ <div class="meters">
+  {{ meter('CPU', r.cpu, '%.0f %%' % r.cpu, 'of ' ~ r.ncpu ~ ' cores · load ' ~ r.load.split()[0]) }}
+  {{ meter('RAM', 100 * r.ram_used / r.ram_total, mem(r.ram_used), 'of ' ~ mem(r.ram_total) ~ ' · swap ' ~ mem(r.swap_used)) }}
+  {% if r.gpu is not none %}{{ meter('GPU', r.gpu, '%.0f %%' % r.gpu, 'render busy · ' ~ r.gpu_mhz ~ ' MHz') }}{% endif %}
+  {% if r.temp is not none %}{{ meter('Temp', r.temp / 85 * 100, '%.1f °C' % r.temp, 'power ' ~ r.power, 75 / 85 * 100, 80 / 85 * 100) }}{% endif %}
+ </div>
+ <table class="res"><tr><th>Part</th><th>CPU</th><th>Memory</th><th>Procs</th></tr>
+  {% for p in r.rows %}<tr class="{{ 'sub' if p.sub }}"><td>{{ ('└ ' if p.sub) ~ p.label }}</td>
+   {% if p.cpu is none %}<td colspan="3" style="color:var(--bad)">not running</td>
+   {% else %}<td>{{ '%.1f' % p.cpu }} %</td><td>{{ mem(p.mem) }}</td><td>{{ p.procs }}</td>{% endif %}</tr>{% endfor %}
+  <tr class="tot"><td>Bot total</td><td>{{ '%.1f' % r.total.cpu }} %</td><td>{{ mem(r.total.mem) }}</td><td></td></tr>
+  <tr class="sub"><td>+ desktop (labwc)</td><td>{{ '%.1f' % r.desktop.cpu }} %</td><td>{{ mem(r.desktop.mem) }}</td><td></td></tr>
+ </table>
+ {% if not r.power_ok %}<p style="color:var(--bad);margin:8px 0 0">Power: {{ r.power }}</p>{% endif %}
+ <div class="sub" style="margin:8px 0 0">over the last {{ '%.0f' % r.window }} s · CPU % is of the whole Pi · memory leaves out shared libraries · GPU is the whole Pi</div>
+ {% else %}unavailable{% endif %}
 </div>
 
 <div class="card" id="card-today" data-live>
@@ -749,7 +791,8 @@ def create_app() -> Flask:
                                       err=request.args.get("err", "")[:200],
                                       keep_min=KEEP_MIN, keep_max=KEEP_MAX, keep_step=KEEP_STEP,
                                       keep_default=KEEP_DEFAULT,
-                                      keep_default_txt=fmt_minutes(KEEP_DEFAULT))
+                                      keep_default_txt=fmt_minutes(KEEP_DEFAULT),
+                                      mem=usage.fmt_mem)
 
     @app.post("/restart")
     def restart():

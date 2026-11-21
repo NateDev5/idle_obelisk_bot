@@ -882,6 +882,14 @@ def test_set_options_rows_match_their_reference_screens():
     assert true_time[4:] == (False, True)                 # your original: off
 
 
+def test_usage_measure_is_sane():
+    from obelisk import usage
+    a = usage.snapshot(); time.sleep(0.2); m = usage.measure(a, usage.snapshot())
+    assert 0 <= m["cpu"] <= 100 and 0 < m["ram_used"] < m["ram_total"]
+    assert [r["label"] for r in m["rows"] if not r["sub"]] == [g[0] for g in usage.GROUPS]
+    assert "Bot total" in usage.text(m)
+
+
 def test_dashboard_updates_itself():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"
@@ -891,7 +899,8 @@ def test_dashboard_updates_itself():
         c = app.test_client(); c.get("/?t=" + tok)
         page = c.get("/").get_data(as_text=True)
         ids = re.findall(r'id="([\w-]+)" data-live', page)
-        assert len(ids) == len(set(ids)) == 11 and "card-keep" in ids and "updated" in ids
+        assert len(ids) == len(set(ids)) == 12 and "card-keep" in ids and "updated" in ids
+        assert "card-res" in ids and "Bot total" in page      # Resources card rendered
         assert "window.dashRefresh" in page and page.count('http-equiv="refresh"') == 1
         assert '<noscript><meta http-equiv="refresh"' in page  # only without JavaScript
     finally:
