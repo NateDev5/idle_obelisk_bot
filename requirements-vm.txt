@@ -1,0 +1,10 @@
+# v2 bot (obelisk/) on a headless VM (scripts/setup_headless_sway.sh), where
+# nothing opens an OpenCV window: same as requirements.txt but with
+# opencv-python-headless (no Qt/X11 libraries). Keep the pins in step with
+# requirements.txt. The two OpenCV packages can't be installed together; to
+# switch an existing venv:
+#   venv/bin/pip uninstall -y opencv-python
+#   venv/bin/pip install -r requirements-vm.txt
+numpy==2.5.2
+opencv-python-headless==5.0.0.93
+Flask==3.1.3          # dashboard
