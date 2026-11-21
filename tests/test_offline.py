@@ -890,6 +890,29 @@ def test_usage_measure_is_sane():
     assert "Bot total" in usage.text(m)
 
 
+def test_usage_history_file_and_graph():
+    from obelisk import usage
+    import obelisk.dashboard as D
+    p = _TMP / "usage.csv"; now = 1_800_000_000.0
+    m = {"cpu": 30.0, "ram_used": 1, "ram_total": 4, "total": {"cpu": 20.0, "mem": 5}, "gpu": None,
+         "temp": 61.5}
+    assert usage.history_line(m, now) == "1800000000,30.0,25.0,20.0,5,,61.5\n"
+    old = [f"{int(now - 9 * 86400 + i * 60)},5,5,5,5,,\n" for i in range(3)]          # past HISTORY_DAYS
+    new = [f"{int(now - 3600 + i * 60)},{i},40,1,1,,\n" for i in range(60)]
+    p.write_text("".join(old) + "garbage\n" + "".join(new))
+    usage.trim_history(p, now)
+    assert p.read_text() == "".join(new)
+    rows = usage.history(24, p, now)
+    assert len(rows) == 60 and rows[-1] == (now - 60, 59.0, 40.0)
+    svg = D.usage_svg(rows, 24, now)
+    assert svg.count('class="u-cpu"') == 1 and svg.count('class="u-ram"') == 1
+    gap = rows[:20] + rows[40:]                     # 20 min missing: lines break
+    assert D.usage_svg(gap, 6, now).count('class="u-cpu"') == 2
+    assert "collecting" in D.usage_svg(rows[:1], 24, now)
+    leg = D.usage_legend(rows)
+    assert leg[0]["label"] == "CPU" and leg[0]["peak"] == 59 and leg[1]["avg"] == 40
+
+
 def test_dashboard_updates_itself():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"

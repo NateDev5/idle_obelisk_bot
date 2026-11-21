@@ -258,12 +258,77 @@ def gem_svg(points, w=640, h=160) -> str:
             f'{t0:%a %H:%M} – {t1:%a %H:%M}</text></svg>')
 
 
+USAGE_RANGES = (6, 24, 168)          # hours the Resources graph can show
+
+
+def usage_svg(rows: list[tuple], hours: int, now: float | None = None,
+              w: int = 360, h: int = 150) -> str:
+    """CPU and RAM % of the whole Pi over `hours`, from logs/usage.csv. Points
+    are bucket averages (the legend's peak is from the raw minutes); a gap of
+    more than a few buckets (dashboard or Pi down) breaks the lines."""
+    if len(rows) < 2:
+        return '<p class="sub">collecting: the graph starts after a few minutes</p>'
+    now = now or dt.datetime.now().timestamp()
+    start = now - hours * 3600
+    bucket = max(hours * 3600 / 240, 120)
+    sums: dict[int, list[float]] = {}
+    for ts, cpu, ram in rows:
+        b = sums.setdefault(int((ts - start) // bucket), [0.0, 0.0, 0])
+        b[0] += cpu; b[1] += ram; b[2] += 1
+    x0, x1, y0, y1 = 40, w - 4, 8, h - 22          # plot box
+    def xy(i: int, v: float) -> str:
+        t = start + (i + 0.5) * bucket
+        return (f"{x0 + (t - start) / (hours * 3600) * (x1 - x0):.1f},"
+                f"{y1 - min(max(v, 0), 100) / 100 * (y1 - y0):.1f}")
+    lines = {"cpu": [], "ram": []}
+    prev = None
+    for i in sorted(sums):
+        if prev is None or i - prev > 2:
+            for k in lines:
+                lines[k].append([])
+        c, r, n = sums[i]
+        lines["cpu"][-1].append(xy(i, c / n))
+        lines["ram"][-1].append(xy(i, r / n))
+        prev = i
+    out = [f'<svg viewBox="0 0 {w} {h}" class="chart" role="img" '
+           f'aria-label="CPU and RAM use over the last {hours} hours">']
+    for v in (0, 25, 50, 75, 100):
+        y = y1 - v / 100 * (y1 - y0)
+        out.append(f'<line x1="{x0}" x2="{x1}" y1="{y:.1f}" y2="{y:.1f}" class="grid"/>')
+        if v % 50 == 0:
+            out.append(f'<text x="{x0 - 6}" y="{y + 4:.1f}" class="axis" text-anchor="end">{v}%</text>')
+    for k in ("ram", "cpu"):                       # CPU on top
+        for seg in lines[k]:
+            if len(seg) == 1:
+                seg = seg * 2
+            out.append(f'<polyline points="{" ".join(seg)}" class="u-{k}"/>')
+    fmt = "%a %H:%M" if hours > 24 else "%H:%M"
+    for frac, anchor in ((0, "start"), (0.5, "middle"), (1, "end")):
+        t = dt.datetime.fromtimestamp(start + frac * hours * 3600)
+        label = "now" if frac == 1 else t.strftime(fmt)
+        out.append(f'<text x="{x0 + frac * (x1 - x0):.1f}" y="{h - 6}" class="axis" '
+                   f'text-anchor="{anchor}">{label}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
+def usage_legend(rows: list[tuple]) -> list[dict]:
+    if not rows:
+        return []
+    out = []
+    for k, label, col in (("accent", "CPU", 1), ("ram", "RAM", 2)):   # k: colour var
+        vals = [r[col] for r in rows]
+        out.append({"key": k, "label": label, "now": vals[-1],
+                    "avg": sum(vals) / len(vals), "peak": max(vals)})
+    return out
+
+
 # ---------------------------------------------------------------- web
 
 BASE_CSS = """:root{--bg:#f6f6f4;--card:#fff;--fg:#1b1b1b;--muted:#6b6b6b;--line:#e3e3df;--accent:#2f6fde;
---ok:#1f8a4c;--warn:#b7791f;--bad:#c0392b}
+--ok:#1f8a4c;--warn:#b7791f;--bad:#c0392b;--ram:#8e44ad}
 @media (prefers-color-scheme:dark){:root{--bg:#141414;--card:#1e1e1e;--fg:#ececec;--muted:#9a9a9a;
---line:#2c2c2c;--accent:#6ea0ff;--ok:#4cc380;--warn:#e0a84a;--bad:#ef6b5e}}
+--line:#2c2c2c;--accent:#6ea0ff;--ok:#4cc380;--warn:#e0a84a;--bad:#ef6b5e;--ram:#c792ea}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
 font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 main{max-width:720px;margin:0 auto;padding:14px 16px 40px}
@@ -300,6 +365,13 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 .meter{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin:3px 0 1px}
 .meter i{display:block;height:100%;background:var(--accent)}.meter i.warn{background:var(--warn)}
 .meter i.bad{background:var(--bad)}
+.chart .grid{stroke:var(--line);stroke-width:1}
+.chart polyline.u-cpu,.chart polyline.u-ram{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+.chart .u-cpu{stroke:var(--accent)}.chart .u-ram{stroke:var(--ram)}
+.uhead{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin:2px 0 4px;flex-wrap:wrap}
+.ulegend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}.ulegend i{display:inline-block;width:10px;height:10px;
+border-radius:3px;margin-right:5px;vertical-align:-1px}.ulegend small{color:var(--muted)}
+.urange{font-size:13px;margin-left:auto}.urange a{margin-left:8px;text-decoration:none}.urange b{margin-left:8px}
 .res{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
 .res th{color:var(--muted);font-weight:600;font-size:12px;text-align:right}.res th:first-child{text-align:left}
 .res td{text-align:right;padding:3px 0;border-top:1px solid var(--line)}.res td:first-child{text-align:left}
@@ -392,7 +464,12 @@ PAGE = """<!doctype html><html lang="en"><head>
   {% if r.gpu is not none %}{{ meter('GPU', r.gpu, '%.0f %%' % r.gpu, 'render busy · ' ~ r.gpu_mhz ~ ' MHz') }}{% endif %}
   {% if r.temp is not none %}{{ meter('Temp', r.temp / 85 * 100, '%.1f °C' % r.temp, 'power ' ~ r.power, 75 / 85 * 100, 80 / 85 * 100) }}{% endif %}
  </div>
- <table class="res"><tr><th>Part</th><th>CPU</th><th>Memory</th><th>Procs</th></tr>
+ <div class="uhead"><div class="ulegend">{% for l in ulegend %}<span><i style="background:var(--{{ l.key }})"></i>{{ l.label }}
+  <small>avg {{ '%.0f' % l.avg }}% · peak {{ '%.0f' % l.peak }}%</small></span>{% endfor %}</div>
+  <div class="urange">{% for hr in usage_ranges %}{% if hr == uhours %}<b>{{ '7 d' if hr == 168 else hr ~ ' h' }}</b>
+   {% else %}<a href="?res={{ hr }}#card-res">{{ '7 d' if hr == 168 else hr ~ ' h' }}</a>{% endif %}{% endfor %}</div></div>
+ {{ uchart|safe }}
+ <table class="res" style="margin-top:8px"><tr><th>Part</th><th>CPU</th><th>Memory</th><th>Procs</th></tr>
   {% for p in r.rows %}<tr class="{{ 'sub' if p.sub }}"><td>{{ ('└ ' if p.sub) ~ p.label }}</td>
    {% if p.cpu is none %}<td colspan="3" style="color:var(--bad)">not running</td>
    {% else %}<td>{{ '%.1f' % p.cpu }} %</td><td>{{ mem(p.mem) }}</td><td>{{ p.procs }}</td>{% endif %}</tr>{% endfor %}
@@ -787,7 +864,12 @@ def create_app() -> Flask:
         pu = d["paused_until"]
         txt = (dt.datetime.fromtimestamp(float(pu)).strftime("%H:%M")
                if pu not in (None, "forever") else "")
+        uhours = request.args.get("res", 24, type=int)
+        uhours = uhours if uhours in USAGE_RANGES else 24
+        urows = usage.history(uhours)
         return render_template_string(PAGE, d=d, chart=gem_svg(d["gems"]), pause_until_txt=txt,
+                                      uchart=usage_svg(urows, uhours), ulegend=usage_legend(urows),
+                                      uhours=uhours, usage_ranges=USAGE_RANGES,
                                       err=request.args.get("err", "")[:200],
                                       keep_min=KEEP_MIN, keep_max=KEEP_MAX, keep_step=KEEP_STEP,
                                       keep_default=KEEP_DEFAULT,
@@ -899,4 +981,5 @@ def create_app() -> Flask:
 def serve(host: str = "0.0.0.0", port: int | None = None) -> None:
     c = ensure_conf()
     app = create_app()
+    usage.start_history()          # one CPU/RAM line a minute to logs/usage.csv
     app.run(host=host, port=port or int(c.get("port", 8765)), threaded=True, use_reloader=False)

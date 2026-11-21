@@ -274,6 +274,11 @@ days from the logs: gems earned per day by source (the gem change around each
 claim, so spending doesn't count), the gem balance, founder crates per day,
 problems per day with the most common ones (the same problem again within an
 hour counts once), and a table of the numbers.
+Its **Resources** card shows CPU, RAM, GPU and temperature for the whole Pi and
+CPU/memory for the bot, the dashboard and Waydroid (same numbers in a terminal:
+`python3 scripts/usage.py`), with a 6 h / 24 h / 7 d graph of CPU and RAM. The
+dashboard service records that history once a minute to `logs/usage.csv`
+(kept 8 days), whether or not the page is open.
 
 One-off commands (stop the service first):
 

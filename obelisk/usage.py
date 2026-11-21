@@ -9,6 +9,10 @@ from each group's cgroup.procs: PSS when root (shared pages split fairly),
 otherwise RssAnon (each process's own heap; Android's other processes can't be
 read for PSS, and full RSS would count the shared libraries 80 times over).
 GPU is the whole Pi's v3d render queue: the game is nearly all of it.
+
+History: the dashboard service runs record_forever() in a thread, appending
+one line a minute to logs/usage.csv (kept HISTORY_DAYS), whether or not anyone
+has the page open; history() reads it back for the card's graph.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import os
 import subprocess
 import threading
 import time
+from pathlib import Path
 
 from . import PACKAGE
 
@@ -35,6 +40,10 @@ THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 NCPU = os.cpu_count() or 1
 HZ = os.sysconf("SC_CLK_TCK")
 PSS = os.geteuid() == 0
+HISTORY = Path(__file__).resolve().parent.parent / "logs" / "usage.csv"
+HISTORY_EVERY = 60                    # seconds between history lines
+HISTORY_DAYS = 8
+HISTORY_COLS = ("ts", "cpu", "ram", "bot_cpu", "bot_mem_kb", "gpu", "temp")   # cpu/ram/gpu in %
 
 
 def read(path: str) -> str:
@@ -210,6 +219,76 @@ class Sampler:
             b = snapshot()
             self.result, self.last = measure(self.last, b), b
             return self.result
+
+
+# ---------------------------------------------------------------- history
+
+def history_line(m: dict, ts: float) -> str:
+    vals = (int(ts), m["cpu"], 100 * m["ram_used"] / m["ram_total"], m["total"]["cpu"],
+            m["total"]["mem"], m["gpu"], m["temp"])
+    return ",".join("" if v is None else f"{v:.1f}" if isinstance(v, float) else str(v)
+                    for v in vals) + "\n"
+
+
+def trim_history(path: Path | None = None, now: float | None = None) -> None:
+    path = path or HISTORY
+    cut = (now or time.time()) - HISTORY_DAYS * 86400
+    try:
+        lines = path.read_text().splitlines(keepends=True)
+    except OSError:
+        return
+    keep = [ln for ln in lines if ln[:1].isdigit() and float(ln.split(",", 1)[0]) >= cut]
+    if len(keep) != len(lines):
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text("".join(keep))
+        tmp.replace(path)
+
+
+def record_forever(path: Path | None = None) -> None:
+    """One history line a minute, each the average over that minute."""
+    path = path or HISTORY
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trim_history(path)
+    a, n = snapshot(), 0
+    while True:
+        time.sleep(HISTORY_EVERY)
+        try:
+            b = snapshot()
+            with open(path, "a") as f:
+                f.write(history_line(measure(a, b), time.time()))
+            a, n = b, n + 1
+            if n % 360 == 0:                      # every 6 h
+                trim_history(path)
+        except Exception:                         # never let the thread die
+            a = snapshot()
+
+
+def start_history() -> None:
+    threading.Thread(target=record_forever, name="usage-history", daemon=True).start()
+
+
+_cache: dict = {}
+
+
+def history(hours: float, path: Path | None = None, now: float | None = None) -> list[tuple]:
+    """[(ts, cpu %, ram %)] for the last `hours`, oldest first."""
+    path = path or HISTORY
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        return []
+    key = (str(path), mtime)
+    if _cache.get("key") != key:
+        rows = []
+        for ln in path.read_text().splitlines():
+            f = ln.split(",")
+            try:
+                rows.append((float(f[0]), float(f[1]), float(f[2])))
+            except (ValueError, IndexError):
+                continue
+        _cache.update(key=key, rows=rows)
+    cut = (now or time.time()) - hours * 3600
+    return [r for r in _cache["rows"] if r[0] >= cut]
 
 
 # ---------------------------------------------------------------- terminal view
