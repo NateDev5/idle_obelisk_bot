@@ -13,6 +13,9 @@
 #                          5900) with a username/password; 0 = localhost only
 #   NOVNC=1                noVNC in the browser: https://<vm-ip>:NOVNC_PORT/
 #                          (default 6080); turns on the VNC password; 0 = off
+#   WAYDROID_UI=1          open Waydroid's full UI when the session starts
+#                          (default; only once Waydroid is installed and
+#                          initialised, so it can be set up first); 0 = off
 # Safe to run again, also after a run of an older version of this script:
 # it rewrites only the files listed at the end and doesn't restart sway (so
 # Waydroid keeps running); it reloads sway's config and restarts wayvnc.
@@ -38,6 +41,7 @@ mkdir -p "$CFG/sway" "$CFG/wayvnc" "$BIN" "$UNITS" "$STATE"
 
 # --- options: environment, else the last run's, else defaults ----------------
 SAVED_RESOLUTION="" SAVED_VNC_LAN="" SAVED_VNC_PORT="" SAVED_NOVNC="" SAVED_NOVNC_PORT=""
+SAVED_WAYDROID_UI=""
 if [ -f "$SETTINGS" ]; then
     . "$SETTINGS"
 else    # an older version of this script kept no settings file: read its files
@@ -50,17 +54,19 @@ VNC_LAN="${VNC_LAN:-${SAVED_VNC_LAN:-0}}"
 VNC_PORT="${VNC_PORT:-${SAVED_VNC_PORT:-5900}}"
 NOVNC="${NOVNC:-${SAVED_NOVNC:-0}}"
 NOVNC_PORT="${NOVNC_PORT:-${SAVED_NOVNC_PORT:-6080}}"
+WAYDROID_UI="${WAYDROID_UI:-${SAVED_WAYDROID_UI:-1}}"
 
 die() { echo "$*" >&2; exit 1; }
 [[ "$RESOLUTION" =~ ^[0-9]+x[0-9]+$ ]] || die "RESOLUTION must look like 1920x1080 (got '$RESOLUTION')."
 [[ "$VNC_LAN" =~ ^[01]$ ]] || die "VNC_LAN must be 0 or 1 (got '$VNC_LAN')."
 [[ "$NOVNC" =~ ^[01]$ ]] || die "NOVNC must be 0 or 1 (got '$NOVNC')."
+[[ "$WAYDROID_UI" =~ ^[01]$ ]] || die "WAYDROID_UI must be 0 or 1 (got '$WAYDROID_UI')."
 [[ "$VNC_PORT" =~ ^[0-9]+$ ]] || die "VNC_PORT must be a number (got '$VNC_PORT')."
 [[ "$NOVNC_PORT" =~ ^[0-9]+$ ]] || die "NOVNC_PORT must be a number (got '$NOVNC_PORT')."
 [ "$VNC_PORT" != "$NOVNC_PORT" ] || die "VNC_PORT and NOVNC_PORT must differ."
 # a password whenever anything but localhost can reach the screen
 AUTH=0; if [ "$VNC_LAN" = 1 ] || [ "$NOVNC" = 1 ]; then AUTH=1; fi
-echo "==> Options: RESOLUTION=$RESOLUTION VNC_LAN=$VNC_LAN VNC_PORT=$VNC_PORT NOVNC=$NOVNC NOVNC_PORT=$NOVNC_PORT"
+echo "==> Options: RESOLUTION=$RESOLUTION VNC_LAN=$VNC_LAN VNC_PORT=$VNC_PORT NOVNC=$NOVNC NOVNC_PORT=$NOVNC_PORT WAYDROID_UI=$WAYDROID_UI"
 
 # --- packages ---------------------------------------------------------------
 echo "==> Installing packages"
@@ -246,6 +252,33 @@ RestartSec=5
 WantedBy=sway-session.target
 EOF
 
+cat > "$UNITS/waydroid-ui.service" <<'EOF'
+# Opens Waydroid's full UI in the headless sway session when it starts. Skipped
+# until Waydroid is installed and initialised (sudo waydroid init -s GAPPS).
+# If no Waydroid session is running yet, this process runs the session, so
+# stopping this unit stops Waydroid. No automatic restart: the obelisk bot's
+# own scripts (restart_all.sh) stop and start the Waydroid session, and a
+# restart here would fight them. Written by setup_headless_sway.sh.
+[Unit]
+Description=Waydroid full UI in the headless sway session
+PartOf=sway-session.target
+Requisite=sway-session.target
+After=sway-session.target wayvnc.service
+ConditionPathExists=/usr/bin/waydroid
+ConditionPathExists=/var/lib/waydroid/waydroid.cfg
+
+[Service]
+Type=simple
+# at boot the system's waydroid-container service may not be up yet
+ExecStartPre=/bin/sh -c 'for i in $$(seq 60); do systemctl is-active --quiet waydroid-container.service && exit 0; sleep 2; done; echo "waydroid-container.service is not running"; exit 1'
+ExecStart=/usr/bin/waydroid show-full-ui
+TimeoutStartSec=150
+Restart=no
+
+[Install]
+WantedBy=sway-session.target
+EOF
+
 # --- wayvnc config ------------------------------------------------------------------
 ADDR=127.0.0.1; [ "$VNC_LAN" = 1 ] && ADDR=0.0.0.0
 PASS=""
@@ -296,6 +329,7 @@ SAVED_VNC_LAN=$VNC_LAN
 SAVED_VNC_PORT=$VNC_PORT
 SAVED_NOVNC=$NOVNC
 SAVED_NOVNC_PORT=$NOVNC_PORT
+SAVED_WAYDROID_UI=$WAYDROID_UI
 EOF
 
 # --- start at boot without a login ---------------------------------------------------
@@ -319,6 +353,14 @@ if [ "$NOVNC" = 1 ]; then
 else
     systemctl --user disable --now novnc.service 2>/dev/null || true
 fi
+if [ "$WAYDROID_UI" = 1 ]; then
+    systemctl --user enable waydroid-ui.service
+else
+    # only unhook it from the session; stopping it would close Waydroid
+    systemctl --user disable waydroid-ui.service 2>/dev/null || true
+fi
+WAYDROID_READY=0
+if [ -x /usr/bin/waydroid ] && [ -f /var/lib/waydroid/waydroid.cfg ]; then WAYDROID_READY=1; fi
 
 SWAY_WAS_RUNNING=0
 if systemctl --user is-active --quiet sway-headless.service; then
@@ -333,6 +375,10 @@ if systemctl --user is-active --quiet sway-headless.service; then
     if systemctl --user is-active --quiet sway-session.target; then
         systemctl --user restart wayvnc.service
         if [ "$NOVNC" = 1 ]; then systemctl --user restart novnc.service; fi
+        # start, not restart: if Waydroid is already open this leaves it be
+        if [ "$WAYDROID_UI" = 1 ] && [ "$WAYDROID_READY" = 1 ]; then
+            systemctl --user --no-block start waydroid-ui.service
+        fi
     else
         systemctl --user start sway-session.target
     fi
@@ -358,6 +404,14 @@ for u in "${UNITS_TO_CHECK[@]}"; do
 done
 WD=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p' || true)
 printf '  %-22s %s\n' "Wayland socket" "${WD:-not set}"
+if [ "$WAYDROID_UI" = 1 ]; then
+    if [ "$WAYDROID_READY" = 1 ]; then
+        printf '  %-22s %s\n' "waydroid-ui.service" \
+            "$(systemctl --user is-active waydroid-ui.service || true) (Android takes a minute to boot)"
+    else
+        printf '  %-22s %s\n' "waydroid-ui.service" "waiting: Waydroid isn't installed/initialised yet"
+    fi
+fi
 journalctl --user -u sway-headless -b --no-pager -o cat 2>/dev/null \
     | grep '^sway-headless:' | tail -n1 | sed 's/^/  /' || true
 
@@ -390,6 +444,11 @@ echo
 echo "In sway: Super+Enter or Ctrl+Alt+Enter opens a foot terminal."
 echo "Entries in ~/.config/autostart/ start with the session, so the bot's"
 echo "systemd/waydroid-obelisk.desktop works as the README describes."
+if [ "$WAYDROID_UI" = 1 ] && [ "$WAYDROID_READY" = 0 ]; then
+    echo "Waydroid opens by itself once it's installed and initialised:"
+    echo "  sudo waydroid init -s GAPPS"
+    echo "  systemctl --user start waydroid-ui     (or reboot)"
+fi
 if [ "$SWAY_WAS_RUNNING" = 1 ]; then
     echo "sway kept running. A change in how it renders (GPU or software) needs"
     echo "  systemctl --user restart sway-headless   (this closes Waydroid)"
@@ -400,4 +459,5 @@ fi
 echo
 echo "Files written: ~/.local/bin/sway-headless{,-session}, ~/.config/sway/config,"
 echo "  ~/.config/wayvnc/config, ~/.config/sway-headless/, ~/.config/systemd/user/"
-echo "  {sway-headless.service,sway-session.target,wayvnc.service,novnc.service}"
+echo "  {sway-headless.service,sway-session.target,wayvnc.service,novnc.service,"
+echo "  waydroid-ui.service}"
