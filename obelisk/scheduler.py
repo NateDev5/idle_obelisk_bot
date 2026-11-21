@@ -111,6 +111,7 @@ class Scheduler:
         self.stuck_restarts = 0
         self.last_gems = None           # last good gem reading this session
         self.founder_claimed = False
+        self.long_job_s = 0.0           # time in long jobs this session (not in the limit)
 
     def run_forever(self) -> None:
         while True:
@@ -260,6 +261,7 @@ class Scheduler:
         self.session_t0 = time.monotonic()
         self.failures, self.session_failed = 0, False
         self.last_gems, self.founder_claimed = None, False   # a phone's spending isn't a loss
+        self.long_job_s = 0.0
         self.off_mining_since, self.stuck_restarts = None, 0
         State().set("last_session_at", self.planner.started)
         log.info("session start")
@@ -328,7 +330,7 @@ class Scheduler:
 
     def session_complete(self, now: float) -> bool:
         p = self.planner
-        if p.timed_out(now):
+        if p.timed_out(now - self.long_job_s):
             self.session_failed = True
             log.warning("session hit the %d s limit", p.MAX_SESSION)
             shot = save_failure(self.last_frame, "session_timeout")
@@ -341,6 +343,8 @@ class Scheduler:
             return False
         for job in self.jobs:
             if job.name == "freebie" and job.last_run < self.session_t0:
+                return False
+            if job.name == "codes" and job.due(now, self.last_frame):   # requested: not before it ran
                 return False
         if any(j.name == "lootbug" for j in self.jobs) and self.last_frame is not None \
                 and (screens.lootbug_stored(self.last_frame) is not None
@@ -485,6 +489,7 @@ class Scheduler:
     def run_job(self, job) -> None:
         before = stable_gems(self.dev)
         self.check_gem_gap(before, f"before job '{job.name}'")
+        t0 = time.monotonic()
         try:
             result = job.run(self.dev)
             log.info("job %s -> %s", job.name, result)
@@ -494,6 +499,8 @@ class Scheduler:
         except JobAborted as e:
             self.job_failed(job.name, e)
         finally:
+            if getattr(job, "long", False):
+                self.long_job_s += time.monotonic() - t0
             self.check_gems(job, before)
 
     def check_gems(self, job, before) -> None:

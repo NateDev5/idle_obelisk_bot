@@ -288,6 +288,16 @@ tapping it opens the page. Redeeming stays manual (Menu > Options > Enter Code).
 `systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-codes.service`, then
 `systemctl --user enable --now ~/idle_obelisk_bot/systemd/obelisk-codes.timer`.
 
+**Enter all codes:** the dashboard's **Reward codes** card has an "Enter all wiki
+codes" button. The bot then types every reward code listed on the wiki into the
+game (grid menu > Options > Codes, the game's own letter keyboard) and the card
+shows the game's answer to each, as a picture of the answer line (tap it for the
+whole screen): "Invalid entry", or whatever the game says for a used or new code.
+It runs in the next session after the cloud check, so new rewards are uploaded at
+the end of that session (in keep-open mode: at once, uploaded when the mode ends).
+A code answered "Invalid entry" is typed again slowly, checking every letter, in
+case a key press was missed. Pictures of the last run are in `logs/codes/`.
+
 One-off commands (stop the service first):
 
 ```bash

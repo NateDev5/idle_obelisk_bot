@@ -208,7 +208,8 @@ def main() -> None:
         logging.getLogger("obelisk").info(
             "mode: %s", "always open" if planner is None else "a short session every 50 min, game in background between")
         try:
-            Scheduler(dev, [founder, LootbugJob(), FreebieJob()],
+            from .redeem import RedeemCodesJob
+            Scheduler(dev, [founder, LootbugJob(), FreebieJob(), RedeemCodesJob()],
                       interrupts=[AnrInterrupt(), OfflineGainsInterrupt(), LootbugPopupInterrupt(),
                                   MenuCloseInterrupt(), NotificationInterrupt()],
                       poll=3.0, planner=planner,

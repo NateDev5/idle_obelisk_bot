@@ -15,6 +15,7 @@ from .vision import ANCHOR_DIR, Anchor, Box, Match, clamp, green_fraction
 MINING, STORE, LOOTBUG_POPUP, UNKNOWN = "mining", "store", "lootbug_popup", "unknown"
 OFFLINE_OPTIONS, OFFLINE_RESULTS = "offline_options", "offline_results"
 GRID_MENU, CLOUD = "grid_menu", "cloud"
+OPTIONS = "options"          # grid menu -> Options (also with the Codes keyboard open)
 ANR = "android_not_responding"
 
 # LAYOUT v2: the game's native 720x1280 layout (no black bars) used since the
@@ -52,6 +53,22 @@ STORE_FILL_X = 586
 STORE_FILL_ROWS = (1184, 1233)   # interior, top..bottom (exclusive)
 
 
+# Codes keyboard (grid -> Options -> Codes, n123_codes_keyboard.png): its own
+# letter keys (no digits), a clear key, Submit. Key centres as drawn there; the
+# codes_keys_end anchor's offset from its home box shifts them all.
+CODE_KEYS = {
+    **{c: (90 + 60 * i, 532) for i, c in enumerate("QWERTYUIOP")},
+    **{c: (104 + 60 * i, 590) for i, c in enumerate("ASDFGHJKL")},
+    **{c: (125 + 60 * i, 650) for i, c in enumerate("ZXCVBNM")},
+}
+CODE_CLEAR = (626, 650)          # empties the input (and clears an answer)
+CODE_KEYS_HOME = (538, 630)      # top-left of the codes_keys_end anchor on that screenshot
+CODE_LINE: Box = (60, 434, 660, 474)   # the "> TEXT <" input line; answers replace it (yellow)
+CODE_ECHO: Box = (60, 394, 660, 434)   # after Submit: the code that was sent, shown above
+CODE_EMPTY_W = 64                # width of the empty "> <" box (3 glyphs; ~10-13 px per letter)
+CODES_ICON_OFFSET = -47          # the Codes button's icon is above its matched label
+
+
 class A:
     """Lazily loaded anchors (so importing never needs the PNGs)."""
 
@@ -85,6 +102,11 @@ class A:
             "anr_wait":   dict(home=(110, 666, 260, 706), margin=40),
             "grid_cloud_button": dict(home=(194, 927, 260, 993)),
             "cloud_title":       dict(home=(178, 329, 450, 356)),
+            "grid_options_button": dict(home=(288, 927, 352, 993)),
+            "options_codes_label": dict(home=(328, 1110, 394, 1134)),
+            "codes_submit":        dict(home=(302, 727, 418, 780)),
+            "codes_keys_end":      dict(home=(538, 630, 650, 672)),
+            "codes_invalid":       dict(home=(255, 444, 465, 463)),
             "founder_crate_1": dict(home=(432, 582, 530, 632), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_2": dict(home=(435, 590, 533, 640), threshold=0.6, search=FOUNDER_AREA),
             "founder_crate_3": dict(home=(448, 590, 546, 640), threshold=0.6, search=FOUNDER_AREA),
@@ -123,10 +145,48 @@ def identify(frame: np.ndarray) -> str:
         return CLOUD
     if A.get("store_close").find(frame) and A.get("grid_cloud_button").find(frame):
         return GRID_MENU
+    if A.get("store_close").find(frame) and A.get("options_codes_label").find(frame):
+        return OPTIONS
     if (A.get("anvil_button").find(frame) and A.get("grid_button").find(frame)
             and store_button(frame) and not A.get("store_close").find(frame)):
         return MINING
     return UNKNOWN
+
+
+def code_box(frame: np.ndarray, area: Box = CODE_LINE) -> Optional[tuple[int, int, int, int]]:
+    """(x, y, w, h) of the near-black text box in `area` of the Codes keyboard
+    (the input line or, after Submit, the echo of the code above it), or None."""
+    x1, y1, x2, y2 = clamp(area, frame)
+    dark = (frame[y1:y2, x1:x2].max(axis=2) < 45).astype(np.uint8)
+    n, _, stats, _ = cv2.connectedComponentsWithStats(dark)
+    boxes = [s for s in stats[1:] if s[2] > 30 and s[3] > 15]
+    if not boxes:
+        return None
+    x, y, w, h, _ = max(boxes, key=lambda s: s[4])
+    return int(x1 + x), int(y1 + y), int(w), int(h)
+
+
+def code_text_colour(frame: np.ndarray) -> Optional[str]:
+    """'yellow' (the game's answer), 'white' (typed text) or None, for the input line."""
+    box = code_box(frame)
+    if box is None:
+        return None
+    x, y, w, h = box
+    px = frame[y:y + h, x:x + w].astype(int)
+    b, g, r = px[..., 0], px[..., 1], px[..., 2]
+    yellow = ((r > 170) & (g > 170) & (b < 110)).sum()
+    white = ((r > 170) & (g > 170) & (b > 170)).sum()
+    if max(yellow, white) < 8:
+        return None
+    return "yellow" if yellow > white else "white"
+
+
+def codes_keyboard(frame: np.ndarray) -> Optional[tuple[int, int]]:
+    """(dx, dy) shift of the open Codes keyboard from its reference position, or None."""
+    m = A.get("codes_keys_end").find(frame)
+    if m is None or not right_size(frame):
+        return None
+    return m.box[0] - CODE_KEYS_HOME[0], m.box[1] - CODE_KEYS_HOME[1]
 
 
 def store_fill(frame: np.ndarray) -> float:

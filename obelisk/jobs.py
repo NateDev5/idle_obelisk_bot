@@ -786,7 +786,7 @@ class NotificationInterrupt:
 
 class MenuCloseInterrupt:
     """Safety net: if the screen sits on one of the bot's own menus (Store,
-    grid menu, Cloud) for AFTER consecutive polls, e.g. after an aborted job,
+    grid menu, Cloud, Options) for AFTER consecutive polls, e.g. after an aborted job,
     press their (matched) close X to get back to the mining screen."""
 
     AFTER = 3
@@ -795,7 +795,7 @@ class MenuCloseInterrupt:
         self.count = 0
 
     def handle(self, dev, frame: np.ndarray) -> bool:
-        if screens.identify(frame) not in (STORE, GRID_MENU, CLOUD):
+        if screens.identify(frame) not in (STORE, GRID_MENU, CLOUD, screens.OPTIONS):
             self.count = 0
             return False
         self.count += 1

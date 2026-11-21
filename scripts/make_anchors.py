@@ -52,6 +52,12 @@ ANCHORS = [
     # Grid menu -> Cloud screen
     ("grid_cloud_button", "n50_grid_menu.png", (194, 927, 260, 993)),
     ("cloud_title",       "n51_cloud.png",     (178, 329, 450, 356)),
+    # Grid menu -> Options -> Codes: the in-game code keyboard (letters only)
+    ("grid_options_button", "n121_grid_menu_v2252.png", (288, 927, 352, 993)),
+    ("options_codes_label", "n122_options_v2252.png", (328, 1110, 394, 1134)),  # "Codes" (yellow)
+    ("codes_submit",        "n123_codes_keyboard.png", (302, 727, 418, 780)),   # not while checking
+    ("codes_keys_end",      "n123_codes_keyboard.png", (538, 630, 650, 672)),   # backspace + clear
+    ("codes_invalid",       "n126_codes_invalid.png",  (255, 444, 465, 463)),   # "> Invalid entry <"
     # Founder drop: lower half of the parachute crate (3 sway poses)
     ("founder_crate_1", "n10_mining_bugs_crate_1.png", (432, 582, 530, 632)),
     ("founder_crate_2", "n30_founder_before.png",      (435, 590, 533, 640)),

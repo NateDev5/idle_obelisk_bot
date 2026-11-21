@@ -28,6 +28,8 @@ from markupsafe import Markup, escape
 
 from . import stats as stats_mod
 from . import usage
+from . import redeem
+from .codes import STATE_KEY as CODES_KNOWN, PAGE_URL as CODES_URL
 from .summary import RE_LINE, summarize
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,6 +231,9 @@ def collect() -> dict:
         "latest_mtime": (dt.datetime.fromtimestamp((LOGS / "latest.jpg").stat().st_mtime)
                          if (LOGS / "latest.jpg").exists() else None),
         "res": resources(),
+        "codes_req": st.get(redeem.REQUEST),
+        "codes_last": st.get(redeem.LAST),
+        "codes_known": len(st.get(CODES_KNOWN) or []),
     }
 
 
@@ -372,6 +377,7 @@ background:var(--card);color:var(--fg)}.ctl button:disabled{opacity:.5}
 .ulegend{display:flex;gap:14px;flex-wrap:wrap;font-size:13px}.ulegend i{display:inline-block;width:10px;height:10px;
 border-radius:3px;margin-right:5px;vertical-align:-1px}.ulegend small{color:var(--muted)}
 .urange{font-size:13px;margin-left:auto}.urange a{margin-left:8px;text-decoration:none}.urange b{margin-left:8px}
+.res.codes td:last-child,.res.codes th:last-child{text-align:left;padding-left:10px}.res.codes img{max-width:100%;image-rendering:pixelated;vertical-align:middle}
 .res{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
 .res th{color:var(--muted);font-weight:600;font-size:12px;text-align:right}.res th:first-child{text-align:left}
 .res td{text-align:right;padding:3px 0;border-top:1px solid var(--line)}.res td:first-child{text-align:left}
@@ -428,6 +434,28 @@ PAGE = """<!doctype html><html lang="en"><head>
   </div>
  </form>
  <span class="sub">{% if d.paused_until %}Resume the bot first.{% elif d.cloud_conflict %}Unavailable during a cloud conflict.{% else %}The game stays on screen so buffs tick, and the bot keeps claiming. No cloud uploads until it ends; then normal sessions resume.{% endif %}</span>
+</div>
+
+<div class="card" id="card-codes" data-live>
+ <h2>Reward codes</h2>
+ {% set cl = d.codes_last %}
+ {% if d.codes_req %}<span class="badge warn">requested · {{ 'waiting: bot paused' if d.paused_until else 'waiting: cloud conflict' if d.cloud_conflict else 'starting now' if d.in_session or d.keep_open else 'at the next session, starting now' }}</span>
+ {% elif cl and not cl.done %}<span class="badge ok">entering codes… {{ cl.results|length }} done</span>{% endif %}
+ <form method="post" action="control" class="ctl" style="margin-top:8px">
+  <button name="a" value="codes" {{ 'disabled' if d.codes_req or (cl and not cl.done) or d.paused_until or d.cloud_conflict }}
+   onclick="return confirm('Enter every code listed on the wiki into the game? Takes a few minutes; new rewards are uploaded at the end of the session.')">Enter all wiki codes</button>
+ </form>
+ <span class="sub">Types each reward code from the <a href="{{ codes_url }}">wiki's Codes page</a> ({{ d.codes_known }} known) into Options → Codes and shows what the game answered.</span>
+ {% if cl %}
+ <div class="sub" style="margin:10px 0 4px">{{ 'Last run' if cl.done else 'This run' }}: {{ fromts(cl.at).strftime('%a %H:%M') }} · {{ cl.results|length }} codes · {{ cl.source }}</div>
+ {% if cl.error %}<p style="color:var(--bad);margin:0 0 6px">Stopped: {{ cl.error }}</p>{% endif %}
+ {% if cl.results %}<table class="res codes"><tr><th>Code</th><th>Game's answer</th></tr>
+  {% for r in cl.results %}<tr><td>{{ r.code }}</td><td>
+   {% if r.answer %}<a href="codeshot/{{ r.code }}.jpg?v={{ cl.at|int }}"><img src="codeshot/{{ r.answer }}?v={{ cl.at|int }}" alt="{{ r.result }}"></a>
+   {% else %}<span style="color:var(--warn)">{{ r.result }}</span>{% endif %}
+   {% if r.note %}<small class="sub" style="display:block">{{ r.note }}</small>{% endif %}</td></tr>{% endfor %}
+ </table>{% endif %}
+ {% endif %}
 </div>
 
 <div class="card" id="card-health" data-live>
@@ -874,7 +902,8 @@ def create_app() -> Flask:
                                       keep_min=KEEP_MIN, keep_max=KEEP_MAX, keep_step=KEEP_STEP,
                                       keep_default=KEEP_DEFAULT,
                                       keep_default_txt=fmt_minutes(KEEP_DEFAULT),
-                                      mem=usage.fmt_mem)
+                                      mem=usage.fmt_mem, codes_url=CODES_URL,
+                                      fromts=dt.datetime.fromtimestamp)
 
     @app.post("/restart")
     def restart():
@@ -908,6 +937,11 @@ def create_app() -> Flask:
                 abort(400)
             if not (st.get("paused_until") or st.get("cloud_conflict")):
                 st.set("keep_open_until", now + minutes * 60)
+        elif a == "codes":
+            if not (st.get("paused_until") or st.get("cloud_conflict")):
+                st.set(redeem.REQUEST, True)
+                if not st.get("keep_open_until"):
+                    st.set("session_now", True)     # runs in a session, after the cloud check
         elif a == "keep_stop":
             st.set("keep_open_until", None)
         elif a == "keep_pi":
@@ -961,6 +995,16 @@ def create_app() -> Flask:
         if not p.exists():
             abort(404)
         return Response(p.read_bytes(), mimetype="image/png",
+                        headers={"Cache-Control": "max-age=86400"})
+
+    @app.get("/codeshot/<name>")
+    def codeshot(name):
+        if not SAFE_NAME.match(name):
+            abort(404)
+        p = redeem.SHOTS / name
+        if not p.exists():
+            abort(404)
+        return Response(p.read_bytes(), mimetype="image/png" if name.endswith(".png") else "image/jpeg",
                         headers={"Cache-Control": "max-age=86400"})
 
     @app.get("/report/<day>")

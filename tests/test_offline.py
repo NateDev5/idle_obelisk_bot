@@ -28,6 +28,7 @@ import obelisk.gems as _gems                       # noqa: E402
 import obelisk.jobs as _jobs                       # noqa: E402
 import obelisk.playtime as _pt                     # noqa: E402
 from obelisk import screens                        # noqa: E402
+from obelisk.screens import A                     # noqa: E402
 from obelisk.jobs import (CloudSync, FounderJob, FreebieJob, JobAborted,  # noqa: E402
                           AnrInterrupt, LootbugJob, LootbugPopupInterrupt, MenuCloseInterrupt, NotificationInterrupt,
                           OfflineGainsInterrupt)
@@ -47,6 +48,8 @@ _gems.UNREAD_DIR = _TMP / "gem_unread"
 _gems.STABLE_WAIT = 0.05                           # unreadable frames don't wait the real 6 s
 _pt.UNREAD_DIR = _TMP / "playtime_unread"
 _jobs.State.PATH = _TMP / "state.json"
+import obelisk.redeem as _redeem                  # noqa: E402
+_redeem.SHOTS = _TMP / "codes"
 import obelisk.notify as _notify                  # noqa: E402
 _notify.CONF = _TMP / "no-notify.conf"            # tests must never send real alerts
 import obelisk.health as _health                  # noqa: E402
@@ -114,6 +117,15 @@ F = {
     "notif": "n116_notification_elixir.png",    # keep-open 00:44: "Elixir Drone is now Grade 6!" box
     # 2026-11-18 00:19: the phone uploaded last, but the Pi's save is 20 s ahead: Download greyed
     "cloud_pi_ahead": "n117_cloud_pi_ahead_of_phone.png",
+    # grid -> Options -> Codes keyboard (v2.2.52, 2026-11-21)
+    "grid_2252": "n121_grid_menu_v2252.png",
+    "options_2252": "n122_options_v2252.png",
+    "codes_kbd": "n123_codes_keyboard.png",       # just opened: "> <"
+    "codes_typed": "n124_codes_typed.png",        # "> ZZZ <"
+    "codes_checking": "n125_codes_checking.png",  # after Submit: spinner, answer already drawn
+    "codes_invalid": "n126_codes_invalid.png",    # "ZZZ" above, "> Invalid entry <"
+    "codes_easter": "n128_codes_easter_egg.png",  # "ALEX" above, "> Worst Dev <" (no reward)
+    "codes_cleared": "n129_codes_cleared.png",    # after the clear key
 }
 FRAMES = {k: load(v) for k, v in F.items()}
 # every v2 screenshot shows one leftover red bug at ~(284,644); a copy with it
@@ -206,7 +218,9 @@ def test_identify():
         "store_ready": screens.STORE, "store_empty": screens.STORE, "store_top": screens.STORE,
         "bug_popup": screens.LOOTBUG_POPUP, "grid": screens.GRID_MENU, "cloud": screens.CLOUD,
         "off_opts": screens.OFFLINE_OPTIONS, "off_res": screens.OFFLINE_RESULTS,
-        "options": screens.UNKNOWN, "store_full": screens.MINING,
+        "options": screens.OPTIONS, "store_full": screens.MINING,
+        "options_2252": screens.OPTIONS, "codes_kbd": screens.OPTIONS, "codes_invalid": screens.OPTIONS,
+        "grid_2252": screens.GRID_MENU,
         "bug_popup_15": screens.LOOTBUG_POPUP, "anr": screens.ANR,
     }
     for k, v in expect.items():
@@ -983,7 +997,8 @@ def test_dashboard_updates_itself():
         c = app.test_client(); c.get("/?t=" + tok)
         page = c.get("/").get_data(as_text=True)
         ids = re.findall(r'id="([\w-]+)" data-live', page)
-        assert len(ids) == len(set(ids)) == 12 and "card-keep" in ids and "updated" in ids
+        assert len(ids) == len(set(ids)) == 13 and "card-keep" in ids and "updated" in ids
+        assert "card-codes" in ids
         assert "card-res" in ids and "Bot total" in page      # Resources card rendered
         assert "window.dashRefresh" in page and page.count('http-equiv="refresh"') == 1
         assert '<noscript><meta http-equiv="refresh"' in page  # only without JavaScript
@@ -1873,6 +1888,135 @@ def test_lootbug_job_retries_a_slow_double_tap_then_falls_back_to_the_field_bug(
     })
     assert job.run(dev) == "looted"
     assert [p[0] for p in dev.presses] == ["hud_stored_2"] * 5 + ["lootall_5"]
+
+
+def test_code_keyboard_reading():
+    f = FRAMES
+    assert screens.codes_keyboard(f["codes_kbd"]) == (0, 0) and screens.codes_keyboard(f["mining_1bug"]) is None
+    assert screens.code_box(f["codes_kbd"])[2] == screens.CODE_EMPTY_W
+    assert screens.code_box(f["codes_typed"])[2] == 102 and screens.code_text_colour(f["codes_typed"]) == "white"
+    for k in ("codes_invalid", "codes_easter", "codes_checking"):
+        assert screens.code_text_colour(f[k]) == "yellow" and screens.code_box(f[k], screens.CODE_ECHO), k
+    assert screens.code_box(f["codes_kbd"], screens.CODE_ECHO) is None
+    assert A.get("codes_invalid").find(f["codes_invalid"]) and not A.get("codes_invalid").find(f["codes_easter"])
+    assert A.get("codes_submit").find(f["codes_invalid"]) and not A.get("codes_submit").find(f["codes_checking"])
+    assert A.get("grid_options_button").find(f["grid"]) and A.get("grid_options_button").find(f["grid_2252"])
+
+
+class CodeKeyboardDevice:
+    """The Options -> Codes keyboard as a little state machine. Typed text is
+    drawn by widening the empty "> <" box ~12 px a letter; after Submit it shows
+    the answer screenshots: a code in VALID -> the "Worst Dev" answer, anything
+    else (a typo) -> Invalid entry, after a spinner frame. drop = press numbers to ignore."""
+
+    VALID = {"ALEX", "FRAYGOTAGEM", "VERF", "POHX"}
+
+    KEYS = {v: k for k, v in screens.CODE_KEYS.items()}
+
+    def __init__(self, drop=(), vanish_after=None):
+        self.screen, self.typed, self.answer, self.queue = "mining", "", None, []
+        self.presses, self.drop, self.vanish_after, self.sent = 0, set(drop), vanish_after, []
+
+    def _typed_frame(self):
+        f = FRAMES["codes_cleared"].copy()
+        w = screens.CODE_EMPTY_W + 12 * len(self.typed)
+        x0 = 360 - w // 2
+        f[440:467, x0:328] = 20                     # widen the dark box both sides,
+        f[440:467, 392:x0 + w] = 20                 # keeping the white "> <" in the middle
+        return f
+
+    def capture(self):
+        if self.queue:
+            return FRAMES[self.queue.pop(0)]
+        if self.screen == "keyboard":
+            return FRAMES[self.answer] if self.answer else self._typed_frame()
+        return FRAMES[{"mining": "mining_1bug", "grid": "grid_2252", "options": "options_2252",
+                       "gone": "bug_popup"}[self.screen]]
+
+    def press(self, x, y):
+        self.presses += 1
+        if self.presses in self.drop:
+            return
+        near = lambda p: abs(x - p[0]) <= 8 and abs(y - p[1]) <= 8
+        if self.screen == "mining" and near((362, 1211)):
+            self.screen = "grid"
+        elif self.screen == "grid" and near((320, 960)):
+            self.screen = "options"
+        elif self.screen == "options" and near((361, 1075)):
+            self.screen = "keyboard"
+        elif self.screen in ("options", "keyboard") and near((440, 1211)):
+            self.screen = "mining"
+        elif self.screen == "keyboard" and near(screens.CODE_CLEAR):
+            self.typed, self.answer = "", None
+        elif self.screen == "keyboard" and near((360, 753)):
+            self.sent.append(self.typed)
+            if self.vanish_after is not None and len(self.sent) > self.vanish_after:
+                self.screen = "gone"
+            elif self.typed in self.VALID:
+                self.answer = "codes_easter"
+            else:
+                self.answer, self.queue = "codes_invalid", ["codes_checking"]
+        elif self.screen == "keyboard" and (x, y) in self.KEYS:
+            if self.answer is None:
+                self.typed += self.KEYS[(x, y)]
+        else:
+            raise AssertionError(f"unexpected press {(x, y)} on {self.screen}")
+
+    def sleep(self, s):
+        pass
+
+
+def test_redeem_codes_job_enters_each_code_and_keeps_the_answers():
+    st = _jobs.State(_TMP / "redeem_state.json")
+    st.set(_redeem.REQUEST, ["ALEX", "zzz", "AB1", "FRAYGOTAGEM "])
+    st.set("session_now", True)
+    job = _redeem.RedeemCodesJob(state=st)
+    assert job.due(0, None)
+    dev = CodeKeyboardDevice(drop={6})              # grid, options, codes, clear, A, [L dropped]
+    out = job.run(dev)
+    last = st.get(_redeem.LAST)
+    res = {r["code"]: r for r in last["results"]}
+    assert res["ALEX"]["result"] == "answered" and res["ALEX"]["note"] == "typed twice"   # "AEX": invalid
+    assert res["ZZZ"]["result"] == "invalid" and res["ZZZ"]["note"] == "typed twice"      # checked again
+    assert res["AB1"]["result"] == "skipped"
+    assert res["FRAYGOTAGEM"]["result"] == "answered" and "note" not in res["FRAYGOTAGEM"]
+    assert dev.sent == ["AEX", "ALEX", "ZZZ", "ZZZ", "FRAYGOTAGEM"]
+    assert (_redeem.SHOTS / "ALEX.png").exists() and (_redeem.SHOTS / "ALEX.jpg").exists()
+    assert last["done"] and last["error"] is None and last["source"] == "given list"
+    assert st.get(_redeem.REQUEST) is None and st.get("session_now") is None and not job.due(0, None)
+    assert dev.screen == "mining" and out == "entered 2 answered, 1 invalid, 1 skipped"
+
+
+def test_redeem_codes_job_stops_if_the_keyboard_goes_away():
+    st = _jobs.State(_TMP / "redeem_state2.json")
+    st.set(_redeem.REQUEST, True)
+    job = _redeem.RedeemCodesJob(state=st, fetch=lambda: ["ALEX", "VERF", "POHX"])
+    dev = CodeKeyboardDevice(vanish_after=1)        # a popup after the 2nd Submit
+    try:
+        job.run(dev)
+        raise AssertionError("expected JobAborted")
+    except JobAborted as e:
+        assert "went away after submitting VERF" in str(e)
+    last = st.get(_redeem.LAST)
+    assert last["done"] and "VERF" in last["error"] and [r["code"] for r in last["results"]] == ["ALEX"]
+    assert last["source"] == "wiki" and st.get(_redeem.REQUEST) is None
+
+
+def test_session_waits_for_a_requested_codes_run_and_not_counted_in_the_limit():
+    clock = [8_000_000.0]
+    planner = SessionPlanner(clock=lambda: clock[0])
+    job = _redeem.RedeemCodesJob()
+    sched = Scheduler(FakeDevice("after_lootall", {}), [job], poll=0, planner=planner)
+    sched.session_t0 = time.monotonic()
+    planner.start()
+    sched.last_screen, sched.last_frame = screens.MINING, FRAMES["after_lootall"]
+    _jobs.State().set(_redeem.REQUEST, True)
+    assert not sched.session_complete(clock[0])
+    _jobs.State().set(_redeem.REQUEST, None)
+    assert sched.session_complete(clock[0])
+    clock[0] += planner.MAX_SESSION + 60
+    sched.long_job_s = 240                           # four minutes of entering codes
+    assert sched.session_complete(clock[0]) and not sched.session_failed
 
 
 def test_session_is_not_over_while_lootbugs_are_stored():
