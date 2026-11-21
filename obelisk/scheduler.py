@@ -51,7 +51,7 @@ FOUNDER_EMPTY_KEEP = 100
 # bot looted lootbugs for the first 33 min of a 6 h keep-open, then saw none
 # until the game was restarted; these show where they went
 KEEP_OPEN_DIR = LATEST.parent / "keep_open"
-KEEP_OPEN_KEEP = 200                # ~16 h at one every 5 min
+KEEP_OPEN_KEEP = 300                # ~25 h at one every 5 min: a full 24 h run
 
 
 def save_latest(dev) -> None:

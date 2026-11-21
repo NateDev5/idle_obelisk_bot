@@ -40,7 +40,7 @@ RE_SESSION_END = re.compile(r"^session end: (\d+) s online; next session (\d\d:\
 SAFE_NAME = re.compile(r"^[\w.\-]+\.(png|jpg)$")
 SAFE_DATE = re.compile(r"^\d{4}-\d\d-\d\d$")
 # keep-open slider, minutes
-KEEP_MIN, KEEP_MAX, KEEP_STEP, KEEP_DEFAULT = 15, 12 * 60, 15, 60
+KEEP_MIN, KEEP_MAX, KEEP_STEP, KEEP_DEFAULT = 15, 24 * 60, 15, 60
 
 
 def conf() -> dict:

@@ -110,7 +110,7 @@ open instead (burns buff timers).
 ### Keep-open mode (dashboard)
 
 To make use of buffs, the dashboard's **Keep game open** card holds the game on
-screen for a chosen time: set the slider (15 min to 12 h), press the button.
+screen for a chosen time: set the slider (15 min to 24 h), press the button.
 Between sessions that starts one at once. Founder crates, lootbugs and freebies
 are still claimed (freebies every 20 min: at game speed 2.10x the bank of 19
 fills in ~63 min, and at once if the Store icon shows the bank full), the
@@ -124,7 +124,7 @@ normal session restarts it, checks the cloud and uploads. A phone save with more
 play time uploaded in the meantime wins as usual, so the Pi's progress from the
 mode is then lost. A cloud conflict cancels the mode.
 
-Every 5 min the mode keeps a full picture in `logs/keep_open/` (newest 200),
+Every 5 min the mode keeps a full picture in `logs/keep_open/` (newest 300),
 named `_bug`/`_nobug` by whether the lootbug finder sees a bug in it: lootbugs
 stopped being found 33 min into a 6 h run on 2026-11-06.
 
