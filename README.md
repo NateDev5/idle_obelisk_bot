@@ -22,6 +22,11 @@ What you need: a Raspberry Pi 5 (any arm64/x86 Linux box that runs Waydroid
 should work, untested) with a Wayland desktop, Python 3.11+, and the game on a
 Google account so it can sync with your phone.
 
+**Guided setup:** clone the repo (step 4) and run `scripts/setup.sh` on the
+Pi or VM. It's a menu that walks through the steps below, shows which ones look
+done already, and on a VM with no desktop sets up the headless one first. The
+steps are written out here for doing it by hand.
+
 1. **Waydroid with Google Play.** Install Waydroid
    ([docs](https://docs.waydro.id/)) and initialise it with the GAPPS image
    (`sudo waydroid init -s GAPPS`). Start it, sign in to Play, install
@@ -44,6 +49,10 @@ Google account so it can sync with your phone.
    venv/bin/python -I tests/test_offline.py     # should pass, no device needed
    venv/bin/python -m obelisk peek              # one live capture: is adb working?
    ```
+
+   On a headless VM (`scripts/setup_headless_sway.sh`) install
+   `requirements-vm.txt` instead: the same with `opencv-python-headless`.
+   Rerunning the setup script switches an existing venv over.
 5. **In-game settings.** In the game: grid menu -> Options. Then run
    `venv/bin/python -I scripts/set_options.py`, which turns off the visual
    effects the bot can't see through and turns the Lootbug gem confirmation

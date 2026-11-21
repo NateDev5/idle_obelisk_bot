@@ -78,6 +78,23 @@ sudo apt-get update
 # screen) and Xwayland (Waydroid doesn't need it)
 sudo apt-get install -y --no-install-recommends "${PKGS[@]}"
 
+# --- the bot's venv: headless OpenCV --------------------------------------------
+# Nothing on the VM opens an OpenCV window, so the bot uses
+# opencv-python-headless (requirements-vm.txt) instead of opencv-python. The
+# two can't share a venv, so the full one is removed first.
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+VENV="$REPO/venv"
+if [ -x "$VENV/bin/pip" ]; then
+    echo "==> Bot venv: installing requirements-vm.txt (headless OpenCV)"
+    if "$VENV/bin/pip" show -q opencv-python >/dev/null 2>&1; then
+        "$VENV/bin/pip" uninstall -y -q opencv-python
+    fi
+    "$VENV/bin/pip" install -q -r "$REPO/requirements-vm.txt"
+    VENV_STATUS="$VENV uses opencv-python-headless"
+else
+    VENV_STATUS="no venv yet: python3 -m venv $VENV && $VENV/bin/pip install -r $REPO/requirements-vm.txt"
+fi
+
 # GPU access (Proxmox VirGL display or a passed-through GPU). Takes effect
 # after a reboot; until then sway falls back to software rendering.
 NEED_REBOOT=0
@@ -444,6 +461,7 @@ echo
 echo "In sway: Super+Enter or Ctrl+Alt+Enter opens a foot terminal."
 echo "Entries in ~/.config/autostart/ start with the session, so the bot's"
 echo "systemd/waydroid-obelisk.desktop works as the README describes."
+echo "Bot venv: $VENV_STATUS"
 if [ "$WAYDROID_UI" = 1 ] && [ "$WAYDROID_READY" = 0 ]; then
     echo "Waydroid opens by itself once it's installed and initialised:"
     echo "  sudo waydroid init -s GAPPS"
