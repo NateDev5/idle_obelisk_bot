@@ -49,13 +49,14 @@ def _ascii(text: str) -> str:
     return text.encode("ascii", "replace").decode().replace("\n", " ")
 
 
-def _post(title: str, message: str, priority: str, tags: str, image=None) -> None:
+def _post(title: str, message: str, priority: str, tags: str, image=None,
+          click: str | None = None) -> None:
     t = topic()
     if not t:
         log.info("no notify.conf topic; alert not sent: %s", title)
         return
     headers = {"Title": _ascii(title), "Priority": priority, "Tags": tags}
-    if url := dashboard_url():
+    if url := click or dashboard_url():
         headers["Click"] = url
     data = message.encode("utf-8")
     if image is not None and Path(image).exists():
@@ -78,8 +79,9 @@ def _post(title: str, message: str, priority: str, tags: str, image=None) -> Non
 
 def alert(key: str, title: str, message: str, priority: str = "default",
           tags: str = "robot", state=None, force: bool = False, sender=_post,
-          image=None) -> bool:
-    """Send unless the same key was sent within REPEAT_AFTER. Returns True if sent."""
+          image=None, click: str | None = None) -> bool:
+    """Send unless the same key was sent within REPEAT_AFTER. Returns True if sent.
+    `click`: link opened when the alert is tapped (default: the dashboard)."""
     if state is None:
         from .jobs import State
         state = State()
@@ -88,10 +90,11 @@ def alert(key: str, title: str, message: str, priority: str = "default",
     if not force and now - sent.get(key, 0) < REPEAT_AFTER:
         return False
     try:
+        kw = {"click": click} if click else {}
         if image is not None:
-            sender(title, message, priority, tags, image)
+            sender(title, message, priority, tags, image, **kw)
         else:
-            sender(title, message, priority, tags)
+            sender(title, message, priority, tags, **kw)
     except Exception as e:                      # never let an alert break the bot
         log.warning("alert %r not sent: %s", key, e)
         return False

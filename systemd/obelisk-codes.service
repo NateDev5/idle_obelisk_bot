@@ -1,0 +1,13 @@
+# Daily check of the fan wiki's Codes page (see obelisk/codes.py): a phone
+# alert when a new reward code appears. Never touches the game.
+#   systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-codes.service
+#   systemctl --user enable --now ~/idle_obelisk_bot/systemd/obelisk-codes.timer
+[Unit]
+Description=Idle Obelisk bot: new reward codes on the wiki
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/idle_obelisk_bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/idle_obelisk_bot/venv/bin/python -m obelisk codes
+Nice=15

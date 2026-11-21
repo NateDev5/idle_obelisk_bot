@@ -7,6 +7,7 @@
   python -m obelisk founder [--dry-run]       # run the Founder-drop job once, live
   python -m obelisk run                       # scheduler loop
   python -m obelisk summary [--yesterday|--date D] [--write]   # daily report
+  python -m obelisk codes [--dry-run]         # new reward codes on the wiki -> phone alert
 """
 
 from __future__ import annotations
@@ -84,6 +85,8 @@ def main() -> None:
     db.add_argument("--port", type=int)
     db.add_argument("--link", action="store_true",
                     help="print the phone links (with the secret token) and exit")
+    co = sub.add_parser("codes", help="check the wiki's Codes page; phone alert for new ones")
+    co.add_argument("--dry-run", action="store_true", help="print the codes; no alert, nothing saved")
     sm = sub.add_parser("summary", help="daily summary from the logs")
     g = sm.add_mutually_exclusive_group()
     g.add_argument("--date", help="YYYY-MM-DD (default: today)")
@@ -100,6 +103,12 @@ def main() -> None:
         if args.alert:
             from .health import alert_if_unhealthy
             alert_if_unhealthy(path, h)
+        return
+    if args.cmd == "codes":
+        from .codes import check
+        setup_logging()
+        new = check(dry_run=args.dry_run)
+        print("new:", ", ".join(new) if new else "none")
         return
     if args.cmd == "bootcheck":
         from .bootcheck import run

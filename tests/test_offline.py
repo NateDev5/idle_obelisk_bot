@@ -913,6 +913,67 @@ def test_usage_history_file_and_graph():
     assert leg[0]["label"] == "CPU" and leg[0]["peak"] == 59 and leg[1]["avg"] == 40
 
 
+CODES_PAGE = """Intro text {{Code|NOTINTABLE}}
+== Reward Codes ==
+{| class="wikitable"
+! Code !! Reward !! Requires !! Cloud save<ref name=Cloud>Requires cloud</ref>
+|-
+| {{Code|KOSHROUNDTWO}} || {{Gems|250}}; 2x [[File:Skill Point.png|16px]] Skill Points || {{NA}} || No <!-- || {{CodeStatus|KOSHROUNDTWO|hardcoded=true}} -->
+|-
+| {{Code|WORLDTWOBABY}} || 20x [[File:Gift.png|16px]] Gifts {{CollapsedDescription|If you claimed it, no duplicate.}} || W2 [[Construct#Monuments|Monument]] || No
+|-
+| {{Code|OSRS}}<ref>Required for an early [[Challenge]]</ref> || 25x [[File:Relic Chest.png|16px]] Relic Chests || {{NA}} || No
+|}
+== Misc. Codes ==
+| {{Code|FPS}} || Toggles an FPS counter
+"""
+
+
+def test_wiki_codes_parse_and_alert_only_new_ones():
+    from obelisk import codes
+    got = codes.parse(CODES_PAGE)
+    assert list(got) == ["KOSHROUNDTWO", "WORLDTWOBABY", "OSRS"]          # reward table only
+    assert got["KOSHROUNDTWO"] == {"reward": "250 gems; 2x Skill Points", "requires": ""}
+    assert got["WORLDTWOBABY"] == {"reward": "20x Gifts", "requires": "W2 Monument"}
+    st = _jobs.State(_TMP / "codes_state.json")
+    sent = []
+    def alert(key, title, msg, **kw):
+        sent.append((key, title, msg, kw.get("click"))); return ok[0]
+    ok = [True]
+    page = [CODES_PAGE]
+    run = lambda **kw: codes.check(state=st, fetch=lambda: page[0], alert=alert, **kw)
+    assert run() == [] and not sent                                   # first run: only records
+    assert st.get(codes.STATE_KEY) == ["KOSHROUNDTWO", "OSRS", "WORLDTWOBABY"]
+    assert run() == [] and not sent                                   # nothing new
+    page[0] = CODES_PAGE.replace("|}", "|-\n| {{Code|NEWGIFTS}} || 10x [[File:Gift.png|16px]] Gifts || {{NA}} || Yes\n|}", 1)
+    assert run(dry_run=True) == ["NEWGIFTS"] and not sent             # dry run: no alert, not saved
+    ok[0] = False
+    assert run() == ["NEWGIFTS"] and len(sent) == 1                   # alert failed: retried next day
+    assert "NEWGIFTS" not in st.get(codes.STATE_KEY)
+    ok[0] = True
+    assert run() == ["NEWGIFTS"] and len(sent) == 2
+    key, title, msg, click = sent[-1]
+    assert title == "New Obelisk code: NEWGIFTS" and msg.startswith("NEWGIFTS: 10x Gifts\n")
+    assert click == codes.PAGE_URL and "NEWGIFTS" in st.get(codes.STATE_KEY)
+    page[0] = CODES_PAGE                                              # removed from the wiki
+    assert run() == [] and "NEWGIFTS" in st.get(codes.STATE_KEY)      # stays known
+    page[0] = "== Reward Codes ==\nthe layout changed"
+    assert run() == [] and sent[-1][0] == "codes_unreadable"
+    def offline():
+        raise OSError("no network")
+    n = len(sent)
+    assert codes.check(state=st, fetch=offline, alert=alert) == [] and len(sent) == n
+
+
+def test_alert_click_link_is_passed_only_when_given():
+    from obelisk import notify
+    calls = []
+    st = _jobs.State(_TMP / "click_state.json")
+    notify.alert("a", "t", "m", state=st, sender=lambda *a, **kw: calls.append(kw))
+    notify.alert("b", "t", "m", state=st, click="https://x", sender=lambda *a, **kw: calls.append(kw))
+    assert calls == [{}, {"click": "https://x"}]
+
+
 def test_dashboard_updates_itself():
     import obelisk.dashboard as D
     D.CONF = _TMP / "dash.conf"

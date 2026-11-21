@@ -280,6 +280,14 @@ CPU/memory for the bot, the dashboard and Waydroid (same numbers in a terminal:
 dashboard service records that history once a minute to `logs/usage.csv`
 (kept 8 days), whether or not the page is open.
 
+**New codes:** `obelisk-codes.timer` checks the fan wiki's
+[Codes page](https://shminer.miraheze.org/wiki/Codes) once a day (around 18:00)
+and sends a phone alert with the code and its reward when a new one is listed;
+tapping it opens the page. Redeeming stays manual (Menu > Options > Enter Code).
+`venv/bin/python -m obelisk codes --dry-run` lists what the page has now. Install:
+`systemctl --user link ~/idle_obelisk_bot/systemd/obelisk-codes.service`, then
+`systemctl --user enable --now ~/idle_obelisk_bot/systemd/obelisk-codes.timer`.
+
 One-off commands (stop the service first):
 
 ```bash
