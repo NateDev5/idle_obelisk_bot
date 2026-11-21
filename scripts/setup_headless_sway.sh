@@ -263,6 +263,13 @@ username=$USER
 password=$PASS
 rsa_private_key_file=$KEY
 EOF
+    if [ "$NOVNC" = 1 ]; then
+        # noVNC can't do wayvnc's RSA-AES login, but it can do Apple DH (ARD),
+        # which wayvnc only offers with relax_encryption. Still encrypted end to
+        # end here: the browser talks https/wss to websockify, and websockify
+        # reaches wayvnc on localhost only.
+        echo "relax_encryption=true" >> "$VNC_CONF"
+    fi
 else
     cat > "$VNC_CONF" <<EOF
 address=$ADDR
