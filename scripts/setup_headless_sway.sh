@@ -1,28 +1,25 @@
 #!/bin/bash
 # Set up a headless sway session (no monitor, no keyboard/mouse) for Waydroid
-# on a Debian/Ubuntu VM (e.g. Proxmox), with foot as the terminal and wayvnc
-# to look at the screen. Starts at boot without anyone logging in.
+# on a Debian/Ubuntu VM (e.g. Proxmox), with foot as the terminal, wayvnc to
+# look at the screen and optionally noVNC to look at it from a browser.
+# Starts at boot without anyone logging in.
 #
 # Run as the user who will run Waydroid and the bot (not root; uses sudo):
 #   scripts/setup_headless_sway.sh
-# Options (environment variables):
+# Options (environment variables; each run remembers them for the next, so
+# e.g. `NOVNC=1 scripts/setup_headless_sway.sh` later only adds noVNC):
 #   RESOLUTION=1920x1080   size of the virtual screen
-#   VNC_LAN=1              wayvnc listens on the LAN with a username/password
-#                          (default: localhost only; connect via an SSH tunnel)
-#   VNC_PORT=5900
-# Safe to run again: it rewrites only the files listed at the end.
+#   VNC_LAN=1              wayvnc listens on the LAN (port VNC_PORT, default
+#                          5900) with a username/password; 0 = localhost only
+#   NOVNC=1                noVNC in the browser: https://<vm-ip>:NOVNC_PORT/
+#                          (default 6080); turns on the VNC password; 0 = off
+# Safe to run again, also after a run of an older version of this script:
+# it rewrites only the files listed at the end and doesn't restart sway (so
+# Waydroid keeps running); it reloads sway's config and restarts wayvnc.
 set -euo pipefail
-
-RESOLUTION="${RESOLUTION:-1920x1080}"
-VNC_LAN="${VNC_LAN:-0}"
-VNC_PORT="${VNC_PORT:-5900}"
 
 if [ "$(id -u)" -eq 0 ]; then
     echo "Run this as your normal user (it uses sudo where needed), not as root." >&2
-    exit 1
-fi
-if ! [[ "$RESOLUTION" =~ ^[0-9]+x[0-9]+$ ]]; then
-    echo "RESOLUTION must look like 1920x1080 (got '$RESOLUTION')." >&2
     exit 1
 fi
 . /etc/os-release
@@ -34,13 +31,42 @@ esac
 CFG="$HOME/.config"
 BIN="$HOME/.local/bin"
 UNITS="$CFG/systemd/user"
-NEED_REBOOT=0
-mkdir -p "$CFG/sway" "$CFG/wayvnc" "$BIN" "$UNITS"
+STATE="$CFG/sway-headless"          # remembered options, noVNC certificate
+SETTINGS="$STATE/settings"
+VNC_CONF="$CFG/wayvnc/config"
+mkdir -p "$CFG/sway" "$CFG/wayvnc" "$BIN" "$UNITS" "$STATE"
+
+# --- options: environment, else the last run's, else defaults ----------------
+SAVED_RESOLUTION="" SAVED_VNC_LAN="" SAVED_VNC_PORT="" SAVED_NOVNC="" SAVED_NOVNC_PORT=""
+if [ -f "$SETTINGS" ]; then
+    . "$SETTINGS"
+else    # an older version of this script kept no settings file: read its files
+    SAVED_RESOLUTION=$(sed -n 's/^output HEADLESS-1 mode --custom //p' "$CFG/sway/config" 2>/dev/null | head -n1 || true)
+    SAVED_VNC_PORT=$(sed -n 's/^port=//p' "$VNC_CONF" 2>/dev/null | head -n1 || true)
+    if grep -qx 'address=0.0.0.0' "$VNC_CONF" 2>/dev/null; then SAVED_VNC_LAN=1; fi
+fi
+RESOLUTION="${RESOLUTION:-${SAVED_RESOLUTION:-1920x1080}}"
+VNC_LAN="${VNC_LAN:-${SAVED_VNC_LAN:-0}}"
+VNC_PORT="${VNC_PORT:-${SAVED_VNC_PORT:-5900}}"
+NOVNC="${NOVNC:-${SAVED_NOVNC:-0}}"
+NOVNC_PORT="${NOVNC_PORT:-${SAVED_NOVNC_PORT:-6080}}"
+
+die() { echo "$*" >&2; exit 1; }
+[[ "$RESOLUTION" =~ ^[0-9]+x[0-9]+$ ]] || die "RESOLUTION must look like 1920x1080 (got '$RESOLUTION')."
+[[ "$VNC_LAN" =~ ^[01]$ ]] || die "VNC_LAN must be 0 or 1 (got '$VNC_LAN')."
+[[ "$NOVNC" =~ ^[01]$ ]] || die "NOVNC must be 0 or 1 (got '$NOVNC')."
+[[ "$VNC_PORT" =~ ^[0-9]+$ ]] || die "VNC_PORT must be a number (got '$VNC_PORT')."
+[[ "$NOVNC_PORT" =~ ^[0-9]+$ ]] || die "NOVNC_PORT must be a number (got '$NOVNC_PORT')."
+[ "$VNC_PORT" != "$NOVNC_PORT" ] || die "VNC_PORT and NOVNC_PORT must differ."
+# a password whenever anything but localhost can reach the screen
+AUTH=0; if [ "$VNC_LAN" = 1 ] || [ "$NOVNC" = 1 ]; then AUTH=1; fi
+echo "==> Options: RESOLUTION=$RESOLUTION VNC_LAN=$VNC_LAN VNC_PORT=$VNC_PORT NOVNC=$NOVNC NOVNC_PORT=$NOVNC_PORT"
 
 # --- packages ---------------------------------------------------------------
-echo "==> Installing sway, foot, wayvnc"
+echo "==> Installing packages"
 PKGS=(sway foot wayvnc fonts-dejavu-core dbus-user-session)
-[ "$VNC_LAN" = 1 ] && PKGS+=(openssh-client)      # ssh-keygen for the VNC key
+[ "$AUTH" = 1 ] && PKGS+=(openssh-client)           # ssh-keygen for wayvnc's key
+[ "$NOVNC" = 1 ] && PKGS+=(novnc websockify openssl)
 sudo apt-get update
 # no recommends: skips swayidle/swaylock (nothing should blank or lock the
 # screen) and Xwayland (Waydroid doesn't need it)
@@ -48,6 +74,7 @@ sudo apt-get install -y --no-install-recommends "${PKGS[@]}"
 
 # GPU access (Proxmox VirGL display or a passed-through GPU). Takes effect
 # after a reboot; until then sway falls back to software rendering.
+NEED_REBOOT=0
 for g in video render; do
     if getent group "$g" >/dev/null && ! id -nG "$USER" | tr ' ' '\n' | grep -qx "$g"; then
         echo "==> Adding $USER to group $g"
@@ -87,7 +114,7 @@ cat > "$BIN/sway-headless-session" <<'EOF'
 #!/bin/sh
 # Run by sway at startup (exec in ~/.config/sway/config): make sure there is a
 # virtual screen, tell systemd where the Wayland socket is, then start
-# sway-session.target (wayvnc + ~/.config/autostart entries).
+# sway-session.target (wayvnc, noVNC, ~/.config/autostart entries).
 # Written by idle_obelisk_bot/scripts/setup_headless_sway.sh.
 if ! swaymsg -t get_outputs -r | grep -q '"name"'; then
     swaymsg create_output >/dev/null
@@ -170,11 +197,11 @@ WantedBy=default.target
 EOF
 
 cat > "$UNITS/sway-session.target" <<'EOF'
-# Started by sway once it is up (sway-headless-session); pulls in wayvnc and
-# the XDG autostart entries in ~/.config/autostart (systemd's generator runs
-# them, as a desktop would). Written by setup_headless_sway.sh.
+# Started by sway once it is up (sway-headless-session); pulls in wayvnc,
+# noVNC and the XDG autostart entries in ~/.config/autostart (systemd's
+# generator runs them, as a desktop would). Written by setup_headless_sway.sh.
 [Unit]
-Description=Headless sway session (wayvnc, XDG autostart)
+Description=Headless sway session (wayvnc, noVNC, XDG autostart)
 BindsTo=sway-headless.service graphical-session.target
 After=sway-headless.service
 Wants=graphical-session-pre.target xdg-desktop-autostart.target
@@ -199,31 +226,70 @@ RestartSec=5
 WantedBy=sway-session.target
 EOF
 
+cat > "$UNITS/novnc.service" <<EOF
+# noVNC: the screen in a browser, https://<vm-ip>:$NOVNC_PORT/ (websockify
+# serves noVNC and passes it on to wayvnc on localhost:$VNC_PORT). HTTPS with a
+# self-signed certificate: noVNC's login needs the browser's WebCrypto, which
+# browsers only allow on https pages. Written by setup_headless_sway.sh.
+[Unit]
+Description=noVNC (browser view of the headless sway session)
+PartOf=sway-session.target
+Requisite=sway-session.target
+After=wayvnc.service
+
+[Service]
+ExecStart=/usr/bin/websockify --web /usr/share/novnc --ssl-only --cert $STATE/novnc.crt --key $STATE/novnc.key 0.0.0.0:$NOVNC_PORT 127.0.0.1:$VNC_PORT
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=sway-session.target
+EOF
+
 # --- wayvnc config ------------------------------------------------------------------
-VNC_CONF="$CFG/wayvnc/config"
-if [ "$VNC_LAN" = 1 ]; then
+ADDR=127.0.0.1; [ "$VNC_LAN" = 1 ] && ADDR=0.0.0.0
+PASS=""
+umask 077
+if [ "$AUTH" = 1 ]; then
     KEY="$CFG/wayvnc/rsa_key.pem"
     [ -f "$KEY" ] || ssh-keygen -q -m pem -t rsa -b 3072 -N "" -f "$KEY"
-    chmod 600 "$KEY"
-    PASS=$(sed -n 's/^password=//p' "$VNC_CONF" 2>/dev/null || true)
+    PASS=$(sed -n 's/^password=//p' "$VNC_CONF" 2>/dev/null | head -n1 || true)
     [ -n "$PASS" ] || PASS=$(od -An -tx1 -N12 /dev/urandom | tr -d ' \n')
-    umask 077
     cat > "$VNC_CONF" <<EOF
-address=0.0.0.0
+address=$ADDR
 port=$VNC_PORT
 enable_auth=true
 username=$USER
 password=$PASS
 rsa_private_key_file=$KEY
 EOF
-    umask 022
 else
     cat > "$VNC_CONF" <<EOF
-address=127.0.0.1
+address=$ADDR
 port=$VNC_PORT
 EOF
 fi
-chmod 600 "$VNC_CONF"
+
+# --- noVNC certificate (self-signed; kept across runs) ------------------------------
+if [ "$NOVNC" = 1 ] && { [ ! -s "$STATE/novnc.crt" ] || [ ! -s "$STATE/novnc.key" ]; }; then
+    echo "==> Making a self-signed certificate for noVNC"
+    SAN="DNS:$(hostname),DNS:localhost,IP:127.0.0.1"
+    for ip in $(hostname -I 2>/dev/null); do SAN="$SAN,IP:$ip"; done
+    openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj "/CN=$(hostname)" \
+        -addext "subjectAltName=$SAN" \
+        -keyout "$STATE/novnc.key" -out "$STATE/novnc.crt" 2>/dev/null
+fi
+umask 022
+
+# --- remember the options for the next run -------------------------------------------
+cat > "$SETTINGS" <<EOF
+# Options of the last setup_headless_sway.sh run (environment variables override).
+SAVED_RESOLUTION=$RESOLUTION
+SAVED_VNC_LAN=$VNC_LAN
+SAVED_VNC_PORT=$VNC_PORT
+SAVED_NOVNC=$NOVNC
+SAVED_NOVNC_PORT=$NOVNC_PORT
+EOF
 
 # --- start at boot without a login ---------------------------------------------------
 echo "==> Enabling lingering for $USER (user services start at boot)"
@@ -236,57 +302,95 @@ for _ in $(seq 20); do
 done
 if ! systemctl --user show-environment >/dev/null 2>&1; then
     echo "Couldn't reach your systemd user manager (are you in 'sudo -i' or 'su'?)." >&2
-    echo "Everything is installed; reboot, or log in as $USER over SSH and run:" >&2
-    echo "  systemctl --user daemon-reload && systemctl --user enable --now sway-headless wayvnc" >&2
+    echo "Everything is installed; reboot, or log in as $USER over SSH and rerun this script." >&2
     exit 1
 fi
 systemctl --user daemon-reload
 systemctl --user enable sway-headless.service wayvnc.service
+if [ "$NOVNC" = 1 ]; then
+    systemctl --user enable novnc.service
+else
+    systemctl --user disable --now novnc.service 2>/dev/null || true
+fi
+
+SWAY_WAS_RUNNING=0
 if systemctl --user is-active --quiet sway-headless.service; then
-    echo "==> sway-headless was already running; not restarting it (that would close"
-    echo "    Waydroid). Apply changes with: systemctl --user restart sway-headless"
+    # Already running (an earlier run): apply the changes without restarting
+    # sway, which would close Waydroid.
+    SWAY_WAS_RUNNING=1
+    echo "==> sway is already running: reloading its config, restarting wayvnc"
+    SOCK=$(systemctl --user show-environment | sed -n 's/^SWAYSOCK=//p')
+    if [ -n "$SOCK" ] && [ -S "$SOCK" ]; then
+        SWAYSOCK="$SOCK" swaymsg reload >/dev/null || echo "   (swaymsg reload failed; the new config applies at the next sway start)"
+    fi
+    if systemctl --user is-active --quiet sway-session.target; then
+        systemctl --user restart wayvnc.service
+        if [ "$NOVNC" = 1 ]; then systemctl --user restart novnc.service; fi
+    else
+        systemctl --user start sway-session.target
+    fi
 else
     systemctl --user start sway-headless.service
 fi
 
 # --- check ------------------------------------------------------------------------------
 echo "==> Checking"
-ok=1
+UNITS_TO_CHECK=(sway-headless.service wayvnc.service)
+[ "$NOVNC" = 1 ] && UNITS_TO_CHECK+=(novnc.service)
 for _ in $(seq 20); do
-    systemctl --user is-active --quiet wayvnc.service && break
+    all=1
+    for u in "${UNITS_TO_CHECK[@]}"; do systemctl --user is-active --quiet "$u" || all=0; done
+    [ "$all" = 1 ] && break
     sleep 0.5
 done
-for u in sway-headless.service wayvnc.service; do
+sleep 1     # a unit that dies right after starting shows up as failed by now
+ok=1
+for u in "${UNITS_TO_CHECK[@]}"; do
     printf '  %-22s %s\n' "$u" "$(systemctl --user is-active "$u" || true)"
     systemctl --user is-active --quiet "$u" || ok=0
 done
-WD=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p')
+WD=$(systemctl --user show-environment | sed -n 's/^WAYLAND_DISPLAY=//p' || true)
 printf '  %-22s %s\n' "Wayland socket" "${WD:-not set}"
 journalctl --user -u sway-headless -b --no-pager -o cat 2>/dev/null \
-    | grep -m1 '^sway-headless:' | sed 's/^/  /' || true
+    | grep '^sway-headless:' | tail -n1 | sed 's/^/  /' || true
 
-IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+IP=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
 echo
 if [ "$ok" = 1 ]; then echo "Headless sway is running."; else
-    echo "Something didn't start; see: journalctl --user -u sway-headless -u wayvnc -b"
+    echo "Something didn't start; see: journalctl --user -u sway-headless -u wayvnc -u novnc -b"
 fi
 echo
-echo "Look at the screen with a VNC viewer (TigerVNC works):"
+if [ "$NOVNC" = 1 ]; then
+    echo "In a browser (noVNC):"
+    echo "  https://${IP:-<vm-ip>}:$NOVNC_PORT/vnc.html?resize=scale"
+    echo "  The certificate is self-signed, so the browser warns once: accept it"
+    echo "  (\"Advanced\" -> \"Proceed\"). It must be https; http won't connect."
+    echo
+fi
+echo "With a VNC viewer (TigerVNC works):"
 if [ "$VNC_LAN" = 1 ]; then
     echo "  address  ${IP:-<vm-ip>}:$VNC_PORT"
-    echo "  username $USER"
-    echo "  password $PASS     (stored in $VNC_CONF)"
 else
     echo "  from your computer:  ssh -L $VNC_PORT:localhost:$VNC_PORT $USER@${IP:-<vm-ip>}"
-    echo "  then connect the viewer to localhost:$VNC_PORT"
-    echo "  (or rerun with VNC_LAN=1 to listen on the LAN with a password)"
+    echo "  then connect the viewer to localhost:$VNC_PORT   (VNC_LAN=1: listen on the LAN)"
 fi
-echo "In sway: Super+Enter or Ctrl+Alt+Enter opens a foot terminal."
+if [ "$AUTH" = 1 ]; then
+    echo
+    echo "VNC login:  username $USER   password $PASS"
+    echo "  (stored in $VNC_CONF)"
+fi
 echo
+echo "In sway: Super+Enter or Ctrl+Alt+Enter opens a foot terminal."
 echo "Entries in ~/.config/autostart/ start with the session, so the bot's"
 echo "systemd/waydroid-obelisk.desktop works as the README describes."
-[ "$NEED_REBOOT" = 1 ] && echo "Reboot once so the new video/render group lets sway use the GPU."
+if [ "$SWAY_WAS_RUNNING" = 1 ]; then
+    echo "sway kept running. A change in how it renders (GPU or software) needs"
+    echo "  systemctl --user restart sway-headless   (this closes Waydroid)"
+fi
+if [ "$NEED_REBOOT" = 1 ]; then
+    echo "Reboot once so the new video/render group lets sway use the GPU."
+fi
 echo
 echo "Files written: ~/.local/bin/sway-headless{,-session}, ~/.config/sway/config,"
-echo "  ~/.config/wayvnc/config, ~/.config/systemd/user/{sway-headless.service,"
-echo "  sway-session.target,wayvnc.service}"
+echo "  ~/.config/wayvnc/config, ~/.config/sway-headless/, ~/.config/systemd/user/"
+echo "  {sway-headless.service,sway-session.target,wayvnc.service,novnc.service}"
